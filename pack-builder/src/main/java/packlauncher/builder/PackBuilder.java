@@ -23,27 +23,31 @@ import packlauncher.common.Hashing;
 import packlauncher.common.Json;
 
 /**
- * Genera pack.json + objects/ a partire dalla cartella di un'istanza client.
+ * Genera pack.json + objects/ a partire da un'istanza di Prism Launcher.
  *
  * Uso:
- *   java -jar pack-builder.jar <cartella-istanza> <cartella-output> [--index <index.json>] [--prune]
+ *   java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]
  *
- * Le opzioni del pack stanno in &lt;cartella-istanza&gt;/pack.properties (vedi README).
- * Se c'è un minecraftinstance.json (istanza CurseForge), versione di Minecraft e
- * NeoForge vengono lette da lì automaticamente.
+ * Versione di Minecraft e loader vengono lette da mmc-pack.json, il nome da instance.cfg.
+ * Vengono pubblicati i file di .minecraft/. Le opzioni del pack stanno in
+ * &lt;cartella-istanza&gt;/pack.properties, accanto a instance.cfg (vedi README).
  */
 public final class PackBuilder {
     private static final List<String> DEFAULT_EXCLUDE = List.of(
             "logs/**", "crash-reports/**", "saves/**", "screenshots/**", "backups/**", "local/**",
-            ".packlauncher/**", ".git/**", ".gitignore", ".curseclient", "minecraftinstance.json",
-            "pack.properties", "usercache.json", "usernamecache.json", "*.log", "**/*.log",
+            ".packlauncher/**", ".git/**", ".gitignore", "usercache.json", "usernamecache.json", "*.log", "**/*.log",
             "downloads/**", "journeymap/data/**", "xaero/**", "patchouli_data.json");
+    private static final Map<String, String> PRISM_LOADERS = Map.of(
+            "net.neoforged", "neoforge",
+            "net.minecraftforge", "forge",
+            "net.fabricmc.fabric-loader", "fabric",
+            "org.quiltmc.quilt-loader", "quilt");
     private static final List<String> DEFAULT_ONCE = List.of(
             "options.txt", "optionsof.txt", "optionsshaders.txt", "servers.dat");
 
     public static void main(String[] args) throws IOException {
         if (args.length < 2) {
-            System.err.println("Uso: java -jar pack-builder.jar <cartella-istanza> <cartella-output> [--index <index.json>] [--prune]");
+            System.err.println("Uso: java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]");
             System.exit(1);
         }
         Path src = Path.of(args[0]).toAbsolutePath().normalize();
@@ -55,36 +59,54 @@ public final class PackBuilder {
             else if (args[i].equals("--prune")) prune = true;
         }
         Path index = indexArg != null ? Path.of(indexArg).toAbsolutePath().normalize() : null;
-        new PackBuilder().build(src, out, index, prune);
+        try {
+            new PackBuilder().build(src, out, index, prune);
+        } catch (IOException | IllegalArgumentException e) {
+            System.err.println("Errore: " + e.getMessage());
+            System.exit(1);
+        }
     }
 
-    public void build(Path src, Path out, Path index, boolean prune) throws IOException {
-        if (!Files.isDirectory(src)) throw new IOException("Cartella non trovata: " + src);
+    public void build(Path instance, Path out, Path index, boolean prune) throws IOException {
+        if (!Files.isDirectory(instance)) throw new IOException("Cartella non trovata: " + instance);
+        Path mmcPack = instance.resolve("mmc-pack.json");
+        if (!Files.exists(mmcPack)) {
+            throw new IOException("Non è un'istanza Prism (manca mmc-pack.json): " + instance
+                    + "\nIndica la cartella dell'istanza, es. ~/.local/share/PrismLauncher/instances/<nome>");
+        }
+        // I file del gioco stanno in .minecraft/ (o minecraft/ nelle istanze più vecchie)
+        Path src = instance.resolve(".minecraft");
+        if (!Files.isDirectory(src)) src = instance.resolve("minecraft");
+        if (!Files.isDirectory(src)) throw new IOException("Manca la cartella .minecraft/ in " + instance);
+
         Properties props = new Properties();
-        Path propsFile = src.resolve("pack.properties");
+        Path propsFile = instance.resolve("pack.properties");
         if (Files.exists(propsFile)) {
             try (Reader r = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) { props.load(r); }
         }
 
-        // Rilevamento automatico da istanza CurseForge
-        String detectedMc = null, detectedLoader = null, detectedLoaderType = null, detectedName = null, detectedVersion = null;
-        Path cf = src.resolve("minecraftinstance.json");
-        if (Files.exists(cf)) {
-            Map<String, Object> j = Json.parseObject(Files.readString(cf, StandardCharsets.UTF_8));
-            Map<String, Object> loader = Json.obj(j, "baseModLoader");
-            detectedMc = Json.str(loader, "minecraftVersion");
-            if (detectedMc == null) detectedMc = Json.str(j, "gameVersion");
-            // "neoforge-21.1.228", "forge-47.3.0", "fabric-0.16.9-1.21.1", "quilt-0.27.1-1.20.1"
-            String ln = Json.str(loader, "name");
-            if (ln != null && ln.contains("-")) {
-                detectedLoaderType = ln.substring(0, ln.indexOf('-'));
-                detectedLoader = ln.substring(ln.indexOf('-') + 1);
-                if (detectedMc != null && detectedLoader.endsWith("-" + detectedMc)) {
-                    detectedLoader = detectedLoader.substring(0, detectedLoader.length() - detectedMc.length() - 1);
-                }
+        // Versione di Minecraft e loader da mmc-pack.json
+        String detectedMc = null, detectedLoader = null, detectedLoaderType = null;
+        Map<String, Object> mmc = Json.parseObject(Files.readString(mmcPack, StandardCharsets.UTF_8));
+        List<Object> components = Json.arr(mmc, "components");
+        if (components != null) {
+            for (Object c : components) {
+                String uid = Json.str(c, "uid");
+                String ver = Json.str(c, "version");
+                if (uid == null || ver == null) continue;
+                String type = PRISM_LOADERS.get(uid);
+                if (uid.equals("net.minecraft")) detectedMc = ver;
+                else if (type != null) { detectedLoaderType = type; detectedLoader = ver; }
             }
-            detectedName = Json.str(j, "name");
-            detectedVersion = Json.str(Json.obj(j, "manifest"), "version");
+        }
+        // Nome e versione del modpack da instance.cfg
+        String detectedName = null, detectedVersion = null;
+        Path cfg = instance.resolve("instance.cfg");
+        if (Files.exists(cfg)) {
+            Properties ic = new Properties();
+            try (Reader r = Files.newBufferedReader(cfg, StandardCharsets.UTF_8)) { ic.load(r); }
+            detectedName = blankToNull(ic.getProperty("name"));
+            detectedVersion = blankToNull(ic.getProperty("ManagedPackVersionName"));
         }
 
         String id = require(props.getProperty("id"), "id");
@@ -209,6 +231,10 @@ public final class PackBuilder {
     private static String require(String v, String key) {
         if (v == null || v.isBlank()) throw new IllegalArgumentException("Manca '" + key + "' in pack.properties");
         return v;
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     private static String stamp() {
