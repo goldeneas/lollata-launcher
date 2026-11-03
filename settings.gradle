@@ -1,0 +1,2 @@
+rootProject.name = 'packlauncher'
+include 'common', 'launcher', 'pack-builder'

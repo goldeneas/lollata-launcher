@@ -1,0 +1,21 @@
+subprojects {
+    apply plugin: 'java'
+    java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+    tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 21 }
+}
+
+// Fat jar: launcher e pack-builder includono il modulo common.
+configure([project(':launcher'), project(':pack-builder')]) {
+    dependencies { implementation project(':common') }
+    jar {
+        dependsOn ':common:jar'
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    }
+}
+project(':launcher') {
+    jar { archiveFileName = 'launcher.jar'; manifest { attributes 'Main-Class': 'packlauncher.Main' } }
+}
+project(':pack-builder') {
+    jar { archiveFileName = 'pack-builder.jar'; manifest { attributes 'Main-Class': 'packlauncher.builder.PackBuilder' } }
+}
