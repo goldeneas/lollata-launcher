@@ -1,0 +1,79 @@
+# Compila launcher.jar e pack-builder.jar a ogni push e pull request.
+# Su un tag "v*" (es. v1.0.0) crea anche una GitHub Release con i jar
+# e i pacchetti pronti (Java incluso) per Windows e Linux.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jars:
+    name: Jar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Il progetto non ha il Gradle wrapper: usiamo la stessa versione di Gradle installata.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Compila i jar
+        run: gradle jar
+
+      - name: Carica launcher.jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: launcher/build/libs/launcher.jar
+          if-no-files-found: error
+
+      - name: Carica pack-builder.jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-builder
+          path: pack-builder/build/libs/pack-builder.jar
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: jars
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      # Compila i jar e crea i pacchetti Windows (.zip) e Linux (.tar.gz) con Temurin 21 incluso.
+      - name: Crea i pacchetti
+        run: |
+          scripts/build-bundle.sh all dist
+          cp launcher/build/libs/launcher.jar pack-builder/build/libs/pack-builder.jar dist/
+
+      - name: Pubblica la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
