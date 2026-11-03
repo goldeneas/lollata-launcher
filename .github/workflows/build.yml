@@ -1,4 +1,5 @@
 # Compila launcher.jar e pack-builder.jar a ogni push e pull request.
+# A ogni push su main aggiorna la Release "latest" con i due jar.
 # Su un tag "v*" (es. v1.0.0) crea anche una GitHub Release con i jar
 # e i pacchetti pronti (Java incluso) per Windows e Linux.
 name: Build
@@ -46,6 +47,34 @@ jobs:
           name: pack-builder
           path: pack-builder/build/libs/pack-builder.jar
           if-no-files-found: error
+
+  # Release "latest": sempre l'ultima build di main, ricreata a ogni push.
+  latest:
+    name: Release latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: jars
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-latest
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: jars
+          merge-multiple: true
+
+      - name: Pubblica launcher.jar e pack-builder.jar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest jars/launcher.jar jars/pack-builder.jar \
+            --target "$GITHUB_SHA" --latest \
+            --title "Ultima build di main" \
+            --notes "Compilata automaticamente dal commit $GITHUB_SHA. Viene sostituita a ogni push su main."
 
   release:
     name: Release

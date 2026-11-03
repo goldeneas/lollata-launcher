@@ -21,23 +21,21 @@ scarica Minecraft, installa NeoForge, sincronizza il modpack ed entra direttamen
 
 I jar vengono compilati da GitHub Actions (workflow `.github/workflows/build.yml`):
 
-- **Versioni rilasciate**: nella pagina [Releases](https://github.com/goldeneas/lollata-launcher/releases)
-  trovi `launcher.jar`, `pack-builder.jar` e i pacchetti `LollataLauncher-Windows.zip` /
-  `LollataLauncher-Linux.tar.gz` con Java incluso. Una release si crea pubblicando un tag:
-  `git tag v1.0.0 && git push origin v1.0.0`.
-- **Ultima build di `main`** (o di una pull request): scheda
-  [Actions](https://github.com/goldeneas/lollata-launcher/actions/workflows/build.yml) → apri l'ultima
-  esecuzione riuscita → sezione *Artifacts* → `launcher` o `pack-builder` (file .zip che contiene il jar;
-  serve essere loggati su GitHub con accesso al repository).
+- **Release `latest`**: a ogni push su `main` la Release
+  [latest](https://github.com/goldeneas/lollata-launcher/releases/tag/latest) viene ricreata con
+  `launcher.jar` e `pack-builder.jar` dell'ultimo commit.
+- **Versioni numerate**: pubblicando un tag (`git tag v1.0.0 && git push origin v1.0.0`) si crea una Release
+  con i due jar e i pacchetti `LollataLauncher-Windows.zip` / `LollataLauncher-Linux.tar.gz` con Java incluso.
+- **Build di una pull request**: scheda
+  [Actions](https://github.com/goldeneas/lollata-launcher/actions/workflows/build.yml) → apri l'esecuzione
+  → sezione *Artifacts* → `launcher` o `pack-builder` (file .zip che contiene il jar).
 
-Sul server Linux si può scaricare l'ultima release direttamente:
+Sul server Linux, con la [GitHub CLI](https://cli.github.com) autenticata (il repository è privato,
+quindi i link di download diretti non funzionano senza login):
 
 ```bash
-curl -fLO https://github.com/goldeneas/lollata-launcher/releases/latest/download/pack-builder.jar
+gh release download latest --repo goldeneas/lollata-launcher --pattern pack-builder.jar --clobber
 ```
-
-(Il repository è privato: senza login questo link non funziona; usa `gh release download --pattern pack-builder.jar`
-con la [GitHub CLI](https://cli.github.com) autenticata, oppure compila da sorgente come sotto.)
 
 ## Compilazione
 
