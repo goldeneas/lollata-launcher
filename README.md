@@ -112,7 +112,22 @@ Se NPM e lo script stanno sulla stessa macchina puoi usare `--bind 127.0.0.1`
 (con NPM in Docker usa invece l'IP del host, es. `172.17.0.1`, o lascia `0.0.0.0`
 e chiudi la porta 8080 dal firewall verso l'esterno).
 
-Per farlo partire all'avvio c'è un'unità systemd in `server-example/mcfiles.service`
+**Avvio automatico con systemd**: dalla cartella `server-example/` lancia
+
+```bash
+sudo ./install.sh                          # /srv/mcfiles sulla porta 8080
+sudo ./install.sh --dir /srv/mcfiles --port 8080 --bind 127.0.0.1
+```
+
+Lo script copia `serve.py` in `/opt/lollata/`, crea `/srv/mcfiles/packs` se manca,
+scrive `/etc/systemd/system/mcfiles.service`, lo abilita all'avvio e lo avvia.
+Altre opzioni: `--user` (default `www-data`, creato se non esiste), `--prefix`
+(default `/opt/lollata`), `--name` (nome del servizio, default `mcfiles`).
+Rilanciarlo con opzioni diverse aggiorna l'installazione; `sudo ./install.sh --uninstall`
+toglie il servizio senza toccare i file del modpack.
+Stato e log: `systemctl status mcfiles`, `journalctl -u mcfiles -f`.
+
+Se preferisci farlo a mano c'è l'unità di esempio `server-example/mcfiles.service`
 (copia `serve.py` in `/opt/lollata/` o modifica il percorso in `ExecStart`).
 
 In alternativa va bene qualsiasi web server statico, ad esempio nginx con
@@ -186,5 +201,5 @@ common/        JSON e SHA-1 (condivisi)
 launcher/      Config, Downloader, GameInstaller (vanilla + NeoForge), PackSync,
                GameLauncher (riga di comando), LaunchFlow, LauncherUI (Swing), Main
 pack-builder/  genera pack.json + objects/ da un'istanza Prism Launcher
-server-example/ serve.py (web server), mcfiles.service, nginx, pack.properties, publish.sh
+server-example/ serve.py (web server), install.sh (servizio systemd), mcfiles.service, nginx, pack.properties, publish.sh
 ```
