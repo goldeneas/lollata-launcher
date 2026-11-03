@@ -1,5 +1,6 @@
 # Avvia serve.py all'avvio del server.
-# Installazione:
+# Il modo più semplice è `sudo ./install.sh`, che genera questa unità con
+# cartella e porta scelte. Installazione a mano:
 #   sudo cp mcfiles.service /etc/systemd/system/
 #   (modifica ExecStart/User se i percorsi sono diversi)
 #   sudo systemctl daemon-reload && sudo systemctl enable --now mcfiles
