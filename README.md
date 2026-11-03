@@ -33,13 +33,21 @@ L'indirizzo del server è in `launcher/src/main/resources/launcher.properties`
 
 ### 1. Preparare il modpack
 
-1. Installa il modpack (es. *All the Mods 10 Aeronautics*) con l'app CurseForge sul tuo PC.
+Il builder supporta solo istanze di **Prism Launcher**.
+
+1. Installa il modpack (es. *All the Mods 10 Aeronautics*) in Prism Launcher sul tuo PC
+   (Aggiungi istanza → CurseForge / Modrinth). Usa il pack client, non il serverpack:
+   solo così vengono incluse anche le mod client-side.
 2. Copia l'intera cartella dell'istanza sul server, ad esempio in `~/packs/atm10a/`.
+   È la cartella che contiene `instance.cfg`, `mmc-pack.json` e `.minecraft/`
+   (in Prism: tasto destro sull'istanza → Cartella).
    Conviene tenerla in un repo git, così hai lo storico delle versioni.
-3. Aggiungi `pack.properties` nella cartella (vedi `server-example/pack.properties`).
+3. Aggiungi `pack.properties` accanto a `instance.cfg` (vedi `server-example/pack.properties`).
    Versione di Minecraft, tipo di loader e versione del loader vengono lette da
-   `minecraftinstance.json` (CurseForge). Altrimenti impostale a mano:
+   `mmc-pack.json`, il nome dell'istanza da `instance.cfg`. Se serve puoi forzarli:
    `minecraft=1.20.1`, `loader=forge`, `loaderVersion=47.4.28`.
+
+Vengono pubblicati solo i file dentro `.minecraft/` (o `minecraft/` nelle istanze vecchie).
 
 ### 2. Pubblicare
 
@@ -133,6 +141,6 @@ Override utili: `-Dindex.url=…` (server alternativo), `-Dlauncher.home=…` (c
 common/        JSON e SHA-1 (condivisi)
 launcher/      Config, Downloader, GameInstaller (vanilla + NeoForge), PackSync,
                GameLauncher (riga di comando), LaunchFlow, LauncherUI (Swing), Main
-pack-builder/  genera pack.json + objects/ da una cartella di istanza
+pack-builder/  genera pack.json + objects/ da un'istanza Prism Launcher
 server-example/ nginx, pack.properties, publish.sh
 ```

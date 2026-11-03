@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pubblica una nuova versione del modpack.
-# Uso: ./publish.sh <cartella-istanza> <id-pack>
+# Uso: ./publish.sh <cartella-istanza-prism> <id-pack>
 set -euo pipefail
 SRC="$1"; ID="$2"
 WWW=/srv/mcfiles/packs
