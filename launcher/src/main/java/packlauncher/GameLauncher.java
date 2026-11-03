@@ -30,22 +30,29 @@ public final class GameLauncher {
 
     public static List<String> buildCommand(GameInstaller inst, GameInstaller.Profile p, Pack pack,
                                             Path instanceDir, String playerName, int memoryMb,
-                                            String launcherName) throws IOException {
+                                            String launcherName, String javaExe) throws IOException {
         Path natives = inst.versionDir(p.id).resolve("natives");
-        Files.createDirectories(natives);
+        inst.extractNatives(p, natives);
 
         Set<String> cp = new LinkedHashSet<>();
-        for (Map<String, Object> lib : p.libraries) cp.add(inst.libraryPath(lib).toString());
+        for (Map<String, Object> lib : p.libraries) {
+            Path lp = inst.libraryPath(lib);
+            if (lp != null) cp.add(lp.toString());
+        }
         cp.add(p.clientJar.toString());
 
+        String uuid = offlineUuid(playerName).toString().replace("-", "");
         Map<String, String> vars = new HashMap<>();
         vars.put("auth_player_name", playerName);
         vars.put("version_name", p.id);
         vars.put("game_directory", instanceDir.toString());
         vars.put("assets_root", inst.assetsDir().toString());
+        vars.put("game_assets", p.gameAssets != null ? p.gameAssets.toString() : inst.assetsDir().toString());
         vars.put("assets_index_name", Json.str(p.assetIndex, "id"));
-        vars.put("auth_uuid", offlineUuid(playerName).toString().replace("-", ""));
+        vars.put("auth_uuid", uuid);
         vars.put("auth_access_token", "0");
+        vars.put("auth_session", "0");
+        vars.put("user_properties", "{}");
         vars.put("clientid", "0");
         vars.put("auth_xuid", "0");
         vars.put("user_type", "legacy");
@@ -58,21 +65,56 @@ public final class GameLauncher {
         vars.put("library_directory", inst.librariesDir().toString());
         vars.put("quickPlayMultiplayer", pack.server != null ? pack.server : "");
 
+        boolean hasServer = pack.server != null && !pack.server.isBlank();
+        boolean quickPlay = p.legacyGameArgs == null && hasQuickPlay(p.gameArgs);
         Map<String, Boolean> features = new HashMap<>();
-        features.put("is_quick_play_multiplayer", pack.server != null && !pack.server.isBlank());
+        features.put("is_quick_play_multiplayer", hasServer && quickPlay);
 
         List<String> cmd = new ArrayList<>();
-        cmd.add(GameInstaller.javaExecutable());
+        cmd.add(javaExe);
         cmd.add("-Xmx" + memoryMb + "M");
         cmd.addAll(pack.jvmArgs);
-        cmd.addAll(expand(p.jvmArgs, vars, features));
+        if (p.jvmArgs.isEmpty()) {
+            // versioni vecchie: nessun argomento JVM nel JSON
+            if (OS.NAME.equals("osx")) cmd.add("-XstartOnFirstThread");
+            cmd.add("-Djava.library.path=" + natives);
+            cmd.add("-cp");
+            cmd.add(vars.get("classpath"));
+        } else {
+            cmd.addAll(expand(p.jvmArgs, vars, features));
+        }
         if (p.logging != null) {
             Path cfg = inst.assetsDir().resolve("log_configs").resolve(Json.str(Json.obj(p.logging, "file"), "id"));
             cmd.add(Json.str(p.logging, "argument").replace("${path}", cfg.toString()));
         }
         cmd.add(p.mainClass);
-        cmd.addAll(expand(p.gameArgs, vars, features));
+        if (p.legacyGameArgs != null) {
+            for (String a : p.legacyGameArgs.trim().split("\\s+")) cmd.add(subst(a, vars));
+        } else {
+            cmd.addAll(expand(p.gameArgs, vars, features));
+        }
+        if (hasServer && !quickPlay) {
+            // prima della 1.20 non c'è Quick Play: si usano --server/--port
+            String host = pack.server;
+            String port = "25565";
+            int colon = host.lastIndexOf(':');
+            if (colon > 0) { port = host.substring(colon + 1); host = host.substring(0, colon); }
+            cmd.add("--server"); cmd.add(host);
+            cmd.add("--port"); cmd.add(port);
+        }
         return cmd;
+    }
+
+    private static boolean hasQuickPlay(List<Object> gameArgs) {
+        for (Object a : gameArgs) {
+            if (a instanceof Map<?, ?> m) {
+                for (Object r : Json.arr(m, "rules")) {
+                    Map<String, Object> f = Json.obj(r, "features");
+                    if (f != null && f.containsKey("is_quick_play_multiplayer")) return true;
+                }
+            }
+        }
+        return false;
     }
 
     public static Process start(List<String> cmd, Path instanceDir) throws IOException {

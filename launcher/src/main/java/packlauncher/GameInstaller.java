@@ -1,31 +1,42 @@
 package packlauncher;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import packlauncher.common.Json;
 
 /**
- * Installa Minecraft vanilla (client, librerie, asset) e NeoForge
- * nella cartella condivisa del launcher, e produce un {@link Profile}
- * pronto per l'avvio.
+ * Installa Minecraft vanilla (client, librerie, asset) e il mod loader
+ * nella cartella condivisa del launcher, e produce un {@link Profile} pronto per l'avvio.
  *
- * Layout (identico a .minecraft, così l'installer di NeoForge lo riconosce):
- *   versions/<id>/<id>.json|.jar, libraries/..., assets/indexes|objects
+ * Loader supportati: vanilla, neoforge, forge, fabric, quilt.
+ * Versioni: tutte quelle con JSON Mojang moderno (1.6+), incluse quelle con
+ * "minecraftArguments" e native da estrarre (fino a 1.12.2).
+ *
+ * Layout (identico a .minecraft, così gli installer di Forge/NeoForge lo riconoscono):
+ *   versions/&lt;id&gt;/&lt;id&gt;.json|.jar, libraries/..., assets/indexes|objects|virtual, runtime/...
  */
 public final class GameInstaller {
     private static final String VERSION_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private static final String ASSETS_URL = "https://resources.download.minecraft.net/";
     private static final String LIBRARIES_URL = "https://libraries.minecraft.net/";
-    private static final String NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/neoforge/";
+    private static final String NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/";
+    private static final String FORGE_MAVEN = "https://maven.minecraftforge.net/net/minecraftforge/forge/";
+    private static final String FABRIC_META = "https://meta.fabricmc.net/v2/versions/loader/";
+    private static final String QUILT_META = "https://meta.quiltmc.org/v3/versions/loader/";
 
     private final Path root;
     private final Downloader dl;
@@ -48,12 +59,18 @@ public final class GameInstaller {
         public String mainClass;
         public String type;
         public int javaMajor;
+        public String javaComponent;
         public Map<String, Object> assetIndex;
         public Map<String, Object> logging;
         public final List<Map<String, Object>> libraries = new ArrayList<>();
+        /** Formato moderno (1.13+): liste con regole. */
         public final List<Object> jvmArgs = new ArrayList<>();
         public final List<Object> gameArgs = new ArrayList<>();
+        /** Formato vecchio (fino a 1.12): stringa unica. Se non null, ha la precedenza. */
+        public String legacyGameArgs;
         public Path clientJar;
+        /** Cartella per ${game_assets} (asset "virtuali" delle versioni molto vecchie). */
+        public Path gameAssets;
     }
 
     // ------------------------------------------------------------------ vanilla
@@ -73,54 +90,123 @@ public final class GameInstaller {
             json = Json.parseObject(Files.readString(jsonFile));
         }
 
-        progress.stage("Scarico Minecraft " + mcVersion);
         Map<String, Object> client = Json.obj(Json.obj(json, "downloads"), "client");
-        dl.downloadAll(List.of(new Downloader.Task(Json.str(client, "url"),
-                versionDir(mcVersion).resolve(mcVersion + ".jar"), Json.str(client, "sha1"), Json.num(client, "size", -1))), progress);
+        Path jar = versionDir(mcVersion).resolve(mcVersion + ".jar");
+        long size = Json.num(client, "size", -1);
+        if (!Files.exists(jar) || Files.size(jar) != size) {
+            progress.stage("Scarico Minecraft " + mcVersion);
+            dl.downloadAll(List.of(new Downloader.Task(Json.str(client, "url"), jar, Json.str(client, "sha1"), size)), progress);
+        }
         return json;
     }
 
-    // ------------------------------------------------------------------ neoforge
+    /** Java richiesto da una versione vanilla: {componente, major}. */
+    public static String[] javaFor(Map<String, Object> vanillaJson) {
+        Map<String, Object> jv = Json.obj(vanillaJson, "javaVersion");
+        int major = (int) Json.num(jv, "majorVersion", 8);
+        String comp = Json.str(jv, "component");
+        return new String[]{comp != null ? comp : JavaRuntime.defaultComponent(major), Integer.toString(major)};
+    }
 
-    /** Installa NeoForge (se serve) e restituisce l'id della versione installata. */
-    public String installNeoForge(String neoVersion, String mcVersion) throws IOException {
-        String id = "neoforge-" + neoVersion;
-        Path jsonFile = versionDir(id).resolve(id + ".json");
-        Path marker = versionDir(id).resolve(".installed");
-        if (Files.exists(jsonFile) && Files.exists(marker)) return id;
+    // ------------------------------------------------------------------ loader
 
-        progress.stage("Installo NeoForge " + neoVersion + " (può richiedere qualche minuto)");
-        // L'installer pretende un launcher_profiles.json nella cartella di destinazione.
+    /**
+     * Installa il loader (se serve) e restituisce l'id della versione da avviare.
+     * javaExe serve per gli installer di Forge/NeoForge.
+     */
+    public String installLoader(String type, String loaderVersion, String mcVersion, String javaExe) throws IOException {
+        if (type == null || type.equals("vanilla")) return mcVersion;
+        if (loaderVersion == null || loaderVersion.isBlank()) throw new IOException("Versione del loader mancante nel pack");
+        switch (type) {
+            case "neoforge": {
+                // 1.20.1 usava l'artefatto "forge" con versione 1.20.1-47.1.x
+                boolean legacy = mcVersion.equals("1.20.1");
+                String artifact = legacy ? "forge" : "neoforge";
+                String full = legacy && !loaderVersion.startsWith("1.20.1-") ? "1.20.1-" + loaderVersion : loaderVersion;
+                String url = NEOFORGE_MAVEN + artifact + "/" + full + "/" + artifact + "-" + full + "-installer.jar";
+                return runInstaller("neoforge-" + full, url, "--installClient", javaExe);
+            }
+            case "forge": {
+                String full = loaderVersion.startsWith(mcVersion + "-") ? loaderVersion : mcVersion + "-" + loaderVersion;
+                String url = FORGE_MAVEN + full + "/forge-" + full + "-installer.jar";
+                return runInstaller("forge-" + full, url, "--installClient", javaExe);
+            }
+            case "fabric":
+                return installProfileJson(FABRIC_META + mcVersion + "/" + loaderVersion + "/profile/json");
+            case "quilt":
+                return installProfileJson(QUILT_META + mcVersion + "/" + loaderVersion + "/profile/json");
+            default:
+                throw new IOException("Loader non supportato: " + type);
+        }
+    }
+
+    /** Fabric/Quilt: basta salvare il JSON del profilo (eredita dalla versione vanilla). */
+    private String installProfileJson(String url) throws IOException {
+        String text = dl.getString(url);
+        String id = Json.str(Json.parseObject(text), "id");
+        Path file = versionDir(id).resolve(id + ".json");
+        if (!Files.exists(file)) {
+            progress.stage("Installo " + id);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, text);
+        }
+        return id;
+    }
+
+    /** Forge/NeoForge: scarica l'installer ufficiale e lo esegue senza interfaccia. */
+    private String runInstaller(String name, String url, String flag, String javaExe) throws IOException {
+        Path cache = root.resolve("cache");
+        Path markerFile = cache.resolve(name + ".installed");
+        if (Files.exists(markerFile)) {
+            String id = Files.readString(markerFile).trim();
+            if (Files.exists(versionDir(id).resolve(id + ".json"))) return id;
+        }
+
+        progress.stage("Installo " + name + " (può richiedere qualche minuto)");
+        progress.progress(0, 0);
         Path profiles = root.resolve("launcher_profiles.json");
         if (!Files.exists(profiles)) Files.writeString(profiles, "{\"profiles\":{}}");
 
-        Path installer = root.resolve("cache").resolve(id + "-installer.jar");
-        dl.downloadOne(new Downloader.Task(NEOFORGE_MAVEN + neoVersion + "/" + id + "-installer.jar", installer, null, -1), null);
+        Path installer = cache.resolve(name + "-installer.jar");
+        dl.downloadOne(new Downloader.Task(url, installer, null, -1), null);
+        String id = installerVersionId(installer);
 
-        Path log = root.resolve("cache").resolve(id + "-installer.log");
-        ProcessBuilder pb = new ProcessBuilder(javaExecutable(), "-jar", installer.toString(),
-                "--install-client", root.toString())
-                .directory(root.resolve("cache").toFile())
+        Path log = cache.resolve(name + "-installer.log");
+        Process p = new ProcessBuilder(javaExe, "-jar", installer.toString(), flag, root.toString())
+                .directory(cache.toFile())
                 .redirectErrorStream(true)
-                .redirectOutput(log.toFile());
-        Process p = pb.start();
+                .redirectOutput(log.toFile())
+                .start();
         try {
-            // l'installer non dà un avanzamento affidabile: barra indeterminata
-            progress.progress(0, 0);
-            if (!p.waitFor(20, TimeUnit.MINUTES)) {
+            if (!p.waitFor(30, TimeUnit.MINUTES)) {
                 p.destroyForcibly();
-                throw new IOException("Installer NeoForge bloccato. Log: " + log);
+                throw new IOException("Installer bloccato. Log: " + log);
             }
         } catch (InterruptedException e) {
             p.destroyForcibly();
             Thread.currentThread().interrupt();
             throw new IOException("Interrotto", e);
         }
-        if (p.exitValue() != 0 || !Files.exists(jsonFile)) {
-            throw new IOException("Installazione NeoForge fallita (codice " + p.exitValue() + "). Log: " + log);
+        if (p.exitValue() != 0 || !Files.exists(versionDir(id).resolve(id + ".json"))) {
+            throw new IOException("Installazione di " + name + " fallita (codice " + p.exitValue() + "). Log: " + log);
         }
-        Files.writeString(marker, mcVersion);
+        Files.writeString(markerFile, id);
         return id;
+    }
+
+    /** Legge dall'installer l'id della versione che creerà (es. "1.20.1-forge-47.3.0"). */
+    private static String installerVersionId(Path installer) throws IOException {
+        try (ZipFile zip = new ZipFile(installer.toFile())) {
+            ZipEntry e = zip.getEntry("install_profile.json");
+            if (e == null) throw new IOException("Installer non valido: " + installer);
+            try (InputStream in = zip.getInputStream(e)) {
+                Map<String, Object> prof = Json.parseObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                String id = Json.str(prof, "version");
+                if (id == null) id = Json.str(Json.obj(prof, "versionInfo"), "id"); // formato vecchio
+                if (id == null) throw new IOException("Versione non trovata nell'installer");
+                return id;
+            }
+        }
     }
 
     // ------------------------------------------------------------------ profilo
@@ -135,12 +221,13 @@ public final class GameInstaller {
         Profile p = new Profile();
         p.id = versionId;
         p.vanillaId = parentId != null ? parentId : versionId;
-        p.mainClass = Json.str(child, "mainClass");
+        p.mainClass = Json.str(child, "mainClass") != null ? Json.str(child, "mainClass") : Json.str(base, "mainClass");
         p.type = Json.str(child, "type") != null ? Json.str(child, "type") : Json.str(base, "type");
         p.assetIndex = Json.obj(base, "assetIndex");
         p.logging = Json.obj(Json.obj(base, "logging"), "client");
-        Map<String, Object> jv = Json.obj(base, "javaVersion");
-        p.javaMajor = (int) Json.num(jv, "majorVersion", 21);
+        String[] java = javaFor(Json.obj(child, "javaVersion") != null ? child : base);
+        p.javaComponent = java[0];
+        p.javaMajor = Integer.parseInt(java[1]);
 
         // Librerie: prima quelle della versione figlia, poi quelle vanilla non duplicate.
         Map<String, Map<String, Object>> libs = new LinkedHashMap<>();
@@ -148,6 +235,12 @@ public final class GameInstaller {
         if (parent != null) addLibraries(libs, parent);
         p.libraries.addAll(libs.values());
 
+        // Argomenti: formato vecchio (stringa) o moderno (liste).
+        String childLegacy = Json.str(child, "minecraftArguments");
+        String parentLegacy = parent != null ? Json.str(parent, "minecraftArguments") : null;
+        if (childLegacy != null || (parentLegacy != null && Json.obj(child, "arguments") == null)) {
+            p.legacyGameArgs = childLegacy != null ? childLegacy : parentLegacy;
+        }
         if (parent != null) {
             p.jvmArgs.addAll(Json.arr(Json.obj(parent, "arguments"), "jvm"));
             p.gameArgs.addAll(Json.arr(Json.obj(parent, "arguments"), "game"));
@@ -170,19 +263,36 @@ public final class GameInstaller {
         for (Object o : Json.arr(version, "libraries")) {
             Map<String, Object> lib = (Map<String, Object>) o;
             if (!OS.allowed(Json.arr(lib, "rules"), Map.of())) continue;
+            if (Boolean.FALSE.equals(lib.get("clientreq"))) continue;
             String[] parts = Json.str(lib, "name").split(":");
             // chiave senza versione: group:artifact[:classifier]
-            String key = parts[0] + ":" + parts[1] + (parts.length > 3 ? ":" + parts[3] : "");
+            // (le versioni vecchie elencano la stessa libreria due volte: jar e native)
+            String key = parts[0] + ":" + parts[1] + (parts.length > 3 ? ":" + parts[3] : "")
+                    + (lib.get("natives") != null ? "#natives" : "");
             out.putIfAbsent(key, lib);
         }
     }
 
-    /** Percorso locale di una libreria. */
+    /** Percorso del jar da mettere nel classpath, o null se la libreria contiene solo native. */
     public Path libraryPath(Map<String, Object> lib) {
-        Map<String, Object> art = Json.obj(Json.obj(lib, "downloads"), "artifact");
-        String path = art != null ? Json.str(art, "path") : null;
-        if (path == null) path = mavenPath(Json.str(lib, "name"));
-        return librariesDir().resolve(path);
+        Map<String, Object> downloads = Json.obj(lib, "downloads");
+        Map<String, Object> art = Json.obj(downloads, "artifact");
+        if (art != null && Json.str(art, "path") != null) return librariesDir().resolve(Json.str(art, "path"));
+        if (downloads != null && art == null) return null;          // solo native (es. lwjgl-platform)
+        if (downloads == null && Json.obj(lib, "natives") != null) return null;
+        return librariesDir().resolve(mavenPath(Json.str(lib, "name")));
+    }
+
+    /** Classificatore delle native per questo OS (formato vecchio), o null. */
+    private static String nativeClassifier(Map<String, Object> lib) {
+        String c = Json.str(Json.obj(lib, "natives"), OS.NAME);
+        return c == null ? null : c.replace("${arch}", OS.ARCH.equals("x86") ? "32" : "64");
+    }
+
+    private Map<String, Object> nativeArtifact(Map<String, Object> lib) {
+        String cls = nativeClassifier(lib);
+        if (cls == null) return null;
+        return Json.obj(Json.obj(Json.obj(lib, "downloads"), "classifiers"), cls);
     }
 
     static String mavenPath(String name) {
@@ -204,44 +314,97 @@ public final class GameInstaller {
         List<Downloader.Task> tasks = new ArrayList<>();
         for (Map<String, Object> lib : p.libraries) {
             Path dest = libraryPath(lib);
-            Map<String, Object> art = Json.obj(Json.obj(lib, "downloads"), "artifact");
-            String url = art != null ? Json.str(art, "url") : null;
-            if (art == null && Json.obj(lib, "downloads") == null) {
-                String base = Json.str(lib, "url") != null ? Json.str(lib, "url") : LIBRARIES_URL;
-                url = base + mavenPath(Json.str(lib, "name"));
+            if (dest != null) {
+                Map<String, Object> art = Json.obj(Json.obj(lib, "downloads"), "artifact");
+                String url;
+                String sha1 = art != null ? Json.str(art, "sha1") : Json.str(lib, "sha1");
+                long size = art != null ? Json.num(art, "size", -1) : Json.num(lib, "size", -1);
+                if (art != null) {
+                    url = Json.str(art, "url");
+                } else {
+                    String base = Json.str(lib, "url") != null ? Json.str(lib, "url") : LIBRARIES_URL;
+                    if (!base.endsWith("/")) base += "/";
+                    url = base + mavenPath(Json.str(lib, "name"));
+                }
+                if (url == null || url.isEmpty()) {
+                    // generata dall'installer (es. client patchato di Forge/NeoForge)
+                    if (!Files.exists(dest)) throw new IOException("Libreria mancante: " + Json.str(lib, "name"));
+                } else {
+                    tasks.add(new Downloader.Task(url, dest, sha1, size));
+                }
             }
-            if (url == null || url.isEmpty()) {
-                // generata dall'installer (es. client patchato di NeoForge)
-                if (!Files.exists(dest)) throw new IOException("Libreria mancante: " + Json.str(lib, "name"));
-                continue;
+            Map<String, Object> nat = nativeArtifact(lib);
+            if (nat != null) {
+                tasks.add(new Downloader.Task(Json.str(nat, "url"), librariesDir().resolve(Json.str(nat, "path")),
+                        Json.str(nat, "sha1"), Json.num(nat, "size", -1)));
             }
-            tasks.add(new Downloader.Task(url, dest, art != null ? Json.str(art, "sha1") : null,
-                    art != null ? Json.num(art, "size", -1) : -1));
         }
         dl.downloadAll(tasks, progress);
     }
 
-    public void downloadAssets(Profile p) throws IOException {
+    /** Estrae le native delle versioni vecchie (fino a 1.18 circa) nella cartella indicata. */
+    public void extractNatives(Profile p, Path nativesDir) throws IOException {
+        Files.createDirectories(nativesDir);
+        for (Map<String, Object> lib : p.libraries) {
+            Map<String, Object> nat = nativeArtifact(lib);
+            if (nat == null) continue;
+            List<String> exclude = new ArrayList<>();
+            for (Object x : Json.arr(Json.obj(lib, "extract"), "exclude")) exclude.add(x.toString());
+            Path jar = librariesDir().resolve(Json.str(nat, "path"));
+            try (ZipFile zip = new ZipFile(jar.toFile())) {
+                for (ZipEntry e : java.util.Collections.list(zip.entries())) {
+                    if (e.isDirectory() || e.getName().startsWith("META-INF/")
+                            || exclude.stream().anyMatch(e.getName()::startsWith)) continue;
+                    Path out = nativesDir.resolve(e.getName()).normalize();
+                    if (!out.startsWith(nativesDir)) continue;
+                    if (Files.exists(out) && Files.size(out) == e.getSize()) continue;
+                    Files.createDirectories(out.getParent());
+                    try (InputStream in = zip.getInputStream(e)) {
+                        Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        }
+    }
+
+    public void downloadAssets(Profile p, Path instanceDir) throws IOException {
         progress.stage("Controllo risorse di gioco");
         String indexId = Json.str(p.assetIndex, "id");
         Path indexFile = assetsDir().resolve("indexes").resolve(indexId + ".json");
         dl.downloadAll(List.of(new Downloader.Task(Json.str(p.assetIndex, "url"), indexFile,
                 Json.str(p.assetIndex, "sha1"), Json.num(p.assetIndex, "size", -1))), progress);
 
-        Map<String, Object> objects = Json.obj(Json.parseObject(Files.readString(indexFile)), "objects");
+        Map<String, Object> index = Json.parseObject(Files.readString(indexFile));
+        Map<String, Object> objects = Json.obj(index, "objects");
         List<Downloader.Task> tasks = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
+        Set<String> seen = new HashSet<>();
         for (Object o : objects.values()) {
             String hash = Json.str(o, "hash");
             if (!seen.add(hash)) continue;
-            String sub = hash.substring(0, 2) + "/" + hash;
-            Path dest = assetsDir().resolve("objects").resolve(sub);
+            Path dest = objectPath(hash);
             // per gli asset basta controllare la dimensione (sono migliaia: niente hash a ogni avvio)
             long size = Json.num(o, "size", -1);
             if (Files.exists(dest) && Files.size(dest) == size) continue;
-            tasks.add(new Downloader.Task(ASSETS_URL + sub, dest, hash, size));
+            tasks.add(new Downloader.Task(ASSETS_URL + hash.substring(0, 2) + "/" + hash, dest, hash, size));
         }
         dl.downloadAll(tasks, progress);
+
+        // Versioni molto vecchie (< 1.7.10): asset copiati con il loro nome reale.
+        p.gameAssets = assetsDir().resolve("virtual").resolve(indexId);
+        boolean virtual = Json.bool(index, "virtual", false);
+        boolean toResources = Json.bool(index, "map_to_resources", false);
+        if (virtual || toResources) {
+            Path target = toResources ? instanceDir.resolve("resources") : p.gameAssets;
+            p.gameAssets = target;
+            for (Map.Entry<String, Object> e : objects.entrySet()) {
+                Path out = target.resolve(e.getKey()).normalize();
+                if (!out.startsWith(target)) continue;
+                long size = Json.num(e.getValue(), "size", -1);
+                if (Files.exists(out) && Files.size(out) == size) continue;
+                Files.createDirectories(out.getParent());
+                Files.copy(objectPath(Json.str(e.getValue(), "hash")), out, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
 
         if (p.logging != null) {
             Map<String, Object> f = Json.obj(p.logging, "file");
@@ -251,10 +414,13 @@ public final class GameInstaller {
         }
     }
 
-    /** Java usato sia per l'installer che per il gioco: quello che sta eseguendo il launcher. */
+    private Path objectPath(String hash) {
+        return assetsDir().resolve("objects").resolve(hash.substring(0, 2)).resolve(hash);
+    }
+
+    /** Java che sta eseguendo il launcher. */
     public static String javaExecutable() {
-        String home = System.getProperty("java.home");
-        Path bin = Path.of(home, "bin");
+        Path bin = Path.of(System.getProperty("java.home"), "bin");
         if (OS.NAME.equals("windows")) {
             Path javaw = bin.resolve("javaw.exe");
             return (Files.exists(javaw) ? javaw : bin.resolve("java.exe")).toString();

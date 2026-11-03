@@ -1,7 +1,8 @@
 subprojects {
     apply plugin: 'java'
-    java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
-    tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 21 }
+    // Codice compilato per Java 17: gira su qualsiasi Java 17+.
+    // Il Java per il GIOCO viene invece scaricato in automatico dal launcher.
+    tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 17 }
 }
 
 // Fat jar: launcher e pack-builder includono il modulo common.
@@ -14,7 +15,14 @@ configure([project(':launcher'), project(':pack-builder')]) {
     }
 }
 project(':launcher') {
-    jar { archiveFileName = 'launcher.jar'; manifest { attributes 'Main-Class': 'packlauncher.Main' } }
+    // Boot.java è compilato per Java 8, così su un Java vecchio compare un messaggio chiaro.
+    sourceSets { boot }
+    compileBootJava { options.release = 8; options.compilerArgs << '-Xlint:-options' }
+    jar {
+        from sourceSets.boot.output
+        archiveFileName = 'launcher.jar'
+        manifest { attributes 'Main-Class': 'packlauncher.Boot' }
+    }
 }
 project(':pack-builder') {
     jar { archiveFileName = 'pack-builder.jar'; manifest { attributes 'Main-Class': 'packlauncher.builder.PackBuilder' } }

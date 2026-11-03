@@ -67,15 +67,22 @@ public final class PackBuilder {
         }
 
         // Rilevamento automatico da istanza CurseForge
-        String detectedMc = null, detectedLoader = null, detectedName = null, detectedVersion = null;
+        String detectedMc = null, detectedLoader = null, detectedLoaderType = null, detectedName = null, detectedVersion = null;
         Path cf = src.resolve("minecraftinstance.json");
         if (Files.exists(cf)) {
             Map<String, Object> j = Json.parseObject(Files.readString(cf, StandardCharsets.UTF_8));
             Map<String, Object> loader = Json.obj(j, "baseModLoader");
             detectedMc = Json.str(loader, "minecraftVersion");
             if (detectedMc == null) detectedMc = Json.str(j, "gameVersion");
+            // "neoforge-21.1.228", "forge-47.3.0", "fabric-0.16.9-1.21.1", "quilt-0.27.1-1.20.1"
             String ln = Json.str(loader, "name");
-            if (ln != null && ln.startsWith("neoforge-")) detectedLoader = ln.substring("neoforge-".length());
+            if (ln != null && ln.contains("-")) {
+                detectedLoaderType = ln.substring(0, ln.indexOf('-'));
+                detectedLoader = ln.substring(ln.indexOf('-') + 1);
+                if (detectedMc != null && detectedLoader.endsWith("-" + detectedMc)) {
+                    detectedLoader = detectedLoader.substring(0, detectedLoader.length() - detectedMc.length() - 1);
+                }
+            }
             detectedName = Json.str(j, "name");
             detectedVersion = Json.str(Json.obj(j, "manifest"), "version");
         }
@@ -83,7 +90,10 @@ public final class PackBuilder {
         String id = require(props.getProperty("id"), "id");
         String name = props.getProperty("name", detectedName != null ? detectedName : id);
         String mc = require(props.getProperty("minecraft", detectedMc), "minecraft");
-        String loaderType = props.getProperty("loader", "neoforge");
+        String loaderType = props.getProperty("loader", detectedLoaderType != null ? detectedLoaderType : "vanilla");
+        if (!List.of("vanilla", "neoforge", "forge", "fabric", "quilt").contains(loaderType)) {
+            throw new IllegalArgumentException("Loader non supportato: " + loaderType);
+        }
         String loaderVersion = props.getProperty("loaderVersion", detectedLoader);
         if (!loaderType.equals("vanilla")) require(loaderVersion, "loaderVersion");
         String version = props.getProperty("version", detectedVersion != null

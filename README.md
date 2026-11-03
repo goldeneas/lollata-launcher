@@ -4,8 +4,13 @@ Launcher Minecraft minimale per giocare con gli amici su un server con modpack.
 L'amico apre `launcher.jar`, inserisce il nome e preme **Gioca**: il launcher
 scarica Minecraft, installa NeoForge, sincronizza il modpack ed entra direttamente nel server.
 
-- Un unico jar, nessuna dipendenza esterna (Java 21+).
-- Più modpack sullo stesso server (`index.json`), con librerie e asset condivisi.
+- Un unico jar, nessuna dipendenza esterna (gira con Java 17+; su Java più vecchi mostra un messaggio chiaro).
+- **Java per il gioco installato in automatico**: il launcher scarica il runtime ufficiale Mojang
+  giusto per la versione di Minecraft (Java 8 / 17 / 21) in `runtime/`.
+- **Più versioni di Minecraft e loader**: ogni modpack dichiara la sua versione.
+  Loader supportati: `neoforge`, `forge`, `fabric`, `quilt`, `vanilla`.
+  Versioni: dalla 1.7.10 in poi (formato argomenti vecchio e native estratte incluse).
+- Più modpack sullo stesso server (`index.json`), con librerie, asset e runtime Java condivisi.
 - Aggiornamenti automatici: a ogni avvio il pack viene confrontato con il server tramite SHA-1.
 - Le mod aggiunte a mano dall'utente e le sue opzioni (`options.txt`) non vengono toccate.
 
@@ -32,7 +37,9 @@ L'indirizzo del server è in `launcher/src/main/resources/launcher.properties`
 2. Copia l'intera cartella dell'istanza sul server, ad esempio in `~/packs/atm10a/`.
    Conviene tenerla in un repo git, così hai lo storico delle versioni.
 3. Aggiungi `pack.properties` nella cartella (vedi `server-example/pack.properties`).
-   Versione di Minecraft e NeoForge vengono lette da `minecraftinstance.json`.
+   Versione di Minecraft, tipo di loader e versione del loader vengono lette da
+   `minecraftinstance.json` (CurseForge). Altrimenti impostale a mano:
+   `minecraft=1.20.1`, `loader=forge`, `loaderVersion=47.4.28`.
 
 ### 2. Pubblicare
 
@@ -74,7 +81,8 @@ whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoFo
 
 ## Lato amico
 
-1. Installa Java 21 a 64 bit: https://adoptium.net (Temurin 21, `.msi`).
+1. Serve un Java 17+ qualsiasi solo per aprire il launcher (https://adoptium.net).
+   Il Java usato dal gioco lo scarica il launcher da solo.
 2. Apri `launcher.jar` con un doppio clic, inserisci il nome e premi **Gioca**.
 
 Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\`.
