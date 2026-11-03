@@ -71,8 +71,28 @@ Scritti solo se mancanti ("once"): `options.txt`, `servers.dat`, `optionsof.txt`
 
 ### 3. Servire i file
 
-Va bene qualsiasi web server statico. C'è un esempio in `server-example/nginx.conf`.
-Consigliato HTTPS con `certbot --nginx`.
+Il modo più semplice è lo script incluso (serve solo Python 3, già presente su quasi tutte le distro):
+
+```bash
+server-example/serve.py --dir /srv/mcfiles --port 8080
+```
+
+Serve `/srv/mcfiles` in HTTP semplice, senza elenco delle cartelle, con
+`Cache-Control: no-cache` sui `.json` e cache lunga sugli `objects/` (immutabili).
+Opzioni anche da variabili d'ambiente: `MCFILES_DIR`, `MCFILES_PORT`, `MCFILES_BIND`.
+
+**HTTPS con Nginx Proxy Manager**: crea un Proxy Host `mcfiles.lollata.xyz` →
+scheme `http`, forward hostname/IP della macchina con lo script, porta `8080`,
+e nella scheda SSL richiedi il certificato Let's Encrypt con "Force SSL".
+Se NPM e lo script stanno sulla stessa macchina puoi usare `--bind 127.0.0.1`
+(con NPM in Docker usa invece l'IP del host, es. `172.17.0.1`, o lascia `0.0.0.0`
+e chiudi la porta 8080 dal firewall verso l'esterno).
+
+Per farlo partire all'avvio c'è un'unità systemd in `server-example/mcfiles.service`
+(copia `serve.py` in `/opt/lollata/` o modifica il percorso in `ExecStart`).
+
+In alternativa va bene qualsiasi web server statico, ad esempio nginx con
+`server-example/nginx.conf` e `certbot --nginx`.
 
 ### 4. Server Minecraft
 
@@ -142,5 +162,5 @@ common/        JSON e SHA-1 (condivisi)
 launcher/      Config, Downloader, GameInstaller (vanilla + NeoForge), PackSync,
                GameLauncher (riga di comando), LaunchFlow, LauncherUI (Swing), Main
 pack-builder/  genera pack.json + objects/ da un'istanza Prism Launcher
-server-example/ nginx, pack.properties, publish.sh
+server-example/ serve.py (web server), mcfiles.service, nginx, pack.properties, publish.sh
 ```

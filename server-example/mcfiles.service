@@ -1,0 +1,22 @@
+# Avvia serve.py all'avvio del server.
+# Installazione:
+#   sudo cp mcfiles.service /etc/systemd/system/
+#   (modifica ExecStart/User se i percorsi sono diversi)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now mcfiles
+# Log: journalctl -u mcfiles -f
+[Unit]
+Description=Lollata Launcher - file del modpack (HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/lollata/serve.py --dir /srv/mcfiles --port 8080
+User=www-data
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/mcfiles
+
+[Install]
+WantedBy=multi-user.target
