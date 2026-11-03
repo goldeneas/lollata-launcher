@@ -85,7 +85,7 @@ whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoFo
    Il Java usato dal gioco lo scarica il launcher da solo.
 2. Apri `launcher.jar` con un doppio clic, inserisci il nome e premi **Gioca**.
 
-Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\`.
+Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\` (Windows) o `~/.lollata-launcher/` (Linux).
 In caso di crash il launcher propone di aprire il log
 (`instances/<pack>/.packlauncher/game-output.log`).
 
@@ -104,14 +104,20 @@ Avvio reale del gioco (Linux, display virtuale) con mod vere scaricate da Modrin
 
 Non testati qui: Windows/macOS reali, il pack ATM10A completo (~450 mod), un server Minecraft vero.
 
-## Pacchetto Windows senza installazioni
+## Pacchetti pronti (Java incluso, nessuna installazione)
 
 ```bash
-scripts/build-windows-bundle.sh
+scripts/build-bundle.sh all        # oppure: windows | linux
 ```
 
-Crea `build/LollataLauncher-Windows.zip` (~47 MB) con Java 21 incluso e `Avvia LollataLauncher.bat`.
-Gli amici estraggono lo zip e fanno doppio clic sul `.bat`: non serve installare Java.
+Crea in `build/`:
+
+- `LollataLauncher-Windows.zip` (~47 MB): estrai e doppio clic su `Avvia LollataLauncher.bat`.
+- `LollataLauncher-Linux.tar.gz` (~50 MB, x86_64): estrai ed esegui `./avvia.sh`.
+  `./crea-collegamento.sh` aggiunge il launcher al menu delle applicazioni.
+
+Il Java incluso (Temurin 21) serve ad aprire il launcher, e viene riusato per i modpack 1.20.5+.
+Per le versioni più vecchie il launcher scarica da solo Java 8 o 17.
 
 ## Debug da terminale
 

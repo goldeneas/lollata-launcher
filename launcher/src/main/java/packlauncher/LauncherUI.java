@@ -50,6 +50,10 @@ public final class LauncherUI {
 
         frame = new JFrame(cfg.launcherName);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        try {
+            java.net.URL icon = LauncherUI.class.getResource("/icon.png");
+            if (icon != null) frame.setIconImage(javax.imageio.ImageIO.read(icon));
+        } catch (Exception ignored) {}
 
         int maxGb = Math.max(2, (int) (totalRamMb() / 1024) - 1);
         int savedGb = Integer.parseInt(cfg.get("memoryGb", "0"));
