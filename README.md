@@ -9,7 +9,7 @@ scarica Minecraft, installa NeoForge, sincronizza il modpack ed entra direttamen
   giusto per la versione di Minecraft (Java 8 / 17 / 21) in `runtime/`.
 - **Più versioni di Minecraft e loader**: ogni modpack dichiara la sua versione.
   Loader supportati: `neoforge`, `forge`, `fabric`, `quilt`, `vanilla`.
-  Versioni: dalla 1.7.10 in poi (formato argomenti vecchio e native estratte incluse).
+  Supporta sia il formato moderno (1.13+) sia quello vecchio (argomenti in stringa, native da estrarre).
 - Più modpack sullo stesso server (`index.json`), con librerie, asset e runtime Java condivisi.
 - Aggiornamenti automatici: a ogni avvio il pack viene confrontato con il server tramite SHA-1.
 - Le mod aggiunte a mano dall'utente e le sue opzioni (`options.txt`) non vengono toccate.
@@ -88,6 +88,30 @@ whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoFo
 Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\`.
 In caso di crash il launcher propone di aprire il log
 (`instances/<pack>/.packlauncher/game-output.log`).
+
+## Test eseguiti
+
+Avvio reale del gioco (Linux, display virtuale) con mod vere scaricate da Modrinth:
+
+| Pack di test | Minecraft | Loader | Java (auto) | Esito |
+|---|---|---|---|---|
+| ATM10 Aeronautics (struttura) + AppleSkin, JEI | 1.21.1 | NeoForge 21.1.265 | 21 | avviato, mod caricate |
+| AppleSkin, JEI | 1.20.1 | Forge 47.4.28 | 17 (scaricato) | avviato, mod caricate |
+| AppleSkin, Fabric API | 1.21.1 | Fabric 0.20.1 | 21 | avviato, 57 mod caricate |
+| — | 1.20.1 | Quilt 0.30.2 | 17 (scaricato) | avviato |
+| — | 1.12.2 | Forge 14.23.5.2864 | 8 (scaricato) | avviato e connesso al server |
+| — | 1.16.5 | vanilla | 8 (scaricato) | avviato |
+
+Non testati qui: Windows/macOS reali, il pack ATM10A completo (~450 mod), un server Minecraft vero.
+
+## Pacchetto Windows senza installazioni
+
+```bash
+scripts/build-windows-bundle.sh
+```
+
+Crea `build/LollataLauncher-Windows.zip` (~47 MB) con Java 21 incluso e `Avvia LollataLauncher.bat`.
+Gli amici estraggono lo zip e fanno doppio clic sul `.bat`: non serve installare Java.
 
 ## Debug da terminale
 

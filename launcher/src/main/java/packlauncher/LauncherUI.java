@@ -132,8 +132,9 @@ public final class LauncherUI {
                     int want = Math.max(2, (p.memoryMb + 1023) / 1024);
                     ramSpinner.setValue(Math.min(want, (Integer) m.getMaximum()));
                 }
-                status.setText(p.name + " v" + p.version + " - Minecraft " + p.minecraft
-                        + (p.loaderType != null && !p.loaderType.equals("vanilla") ? " " + p.loaderType : "") + " - pronto");
+                status.setText("<html>" + p.name + " v" + p.version + "<br>Minecraft " + p.minecraft
+                        + (p.loaderType != null && !p.loaderType.equals("vanilla") ? " - " + p.loaderType + " " + p.loaderVersion : "")
+                        + " - pronto</html>");
                 playButton.setEnabled(true);
             });
         });
