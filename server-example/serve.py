@@ -24,11 +24,20 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # il default è 5: con un launcher che apre 16 connessioni insieme (per ogni
+    # giocatore) le connessioni in più verrebbero rifiutate e ritentate
+    request_queue_size = 128
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "LollataFiles/1.0"
     sys_version = ""
     # keep-alive: il launcher scarica migliaia di oggetti piccoli
     protocol_version = "HTTP/1.1"
+    # chiude le connessioni keep-alive inattive, così i thread non restano appesi
+    timeout = 60
 
     extensions_map = {
         **SimpleHTTPRequestHandler.extensions_map,
@@ -37,6 +46,14 @@ class Handler(SimpleHTTPRequestHandler):
         ".zip": "application/zip",
         ".gz": "application/gzip",
     }
+
+    def copyfile(self, source, outputfile):
+        # sendfile(): il kernel copia il file direttamente sul socket,
+        # molto più veloce del ciclo read/write in Python per le mod grandi
+        try:
+            self.connection.sendfile(source)
+        except (AttributeError, OSError, ValueError):
+            super().copyfile(source, outputfile)
 
     def list_directory(self, path):
         # niente elenco dei file: le cartelle non si possono sfogliare
@@ -78,8 +95,7 @@ def main():
         print(f"Attenzione: {root}/packs/index.json non esiste ancora "
               "(pubblica un pack con publish.sh).", file=sys.stderr)
 
-    ThreadingHTTPServer.daemon_threads = True
-    httpd = ThreadingHTTPServer((a.bind, a.port), partial(Handler, directory=root))
+    httpd = Server((a.bind, a.port), partial(Handler, directory=root))
     print(f"Servo {root} su http://{a.bind}:{a.port}/  (Ctrl+C per fermare)", file=sys.stderr)
     try:
         httpd.serve_forever()
