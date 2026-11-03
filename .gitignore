@@ -1,3 +1,33 @@
+# --- Output di build ---
 build/
-.gradle/
 */build/
+.gradle/
+out/
+dist/
+*.class
+
+# Pacchetti generati da scripts/build-bundle.sh
+*-Windows.zip
+*-Linux.tar.gz
+
+# --- JRE inclusi nei pacchetti (non vanno nel repository) ---
+# Cartella di un pacchetto estratto (es. LollataLauncher/java/...)
+/*Launcher/
+# Archivi e cartelle di JRE/JDK scaricati a mano
+jre.zip
+jre.tar.gz
+jre/
+jdk/
+jdk-*/
+jre-*/
+OpenJDK*/
+*-jre/
+# Runtime Java scaricati dal launcher, se si usa -Dlauncher.home dentro il repo
+runtime/
+
+# --- IDE / sistema ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
