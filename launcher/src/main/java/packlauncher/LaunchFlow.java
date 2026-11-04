@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+import packlauncher.common.ServerProbe;
+
 /** Il flusso completo: pack -> vanilla -> Java -> loader -> librerie/asset -> sync -> comando. */
 public final class LaunchFlow {
     private static final Pattern VALID_NAME = Pattern.compile("[A-Za-z0-9_]{3,16}");
@@ -19,6 +21,40 @@ public final class LaunchFlow {
 
     public record Prepared(List<String> command, Path instanceDir, Pack pack) {}
 
+    /** Attesa massima per la sonda del server Minecraft prima di ripiegare sul manifest. */
+    public static final int PROBE_TIMEOUT_MS = 3000;
+
+    /**
+     * Chiede direttamente al server Minecraft se è premium o offline, così un cambio di online-mode
+     * viene visto subito, senza ripubblicare il pack. Se il server non risponde resta il valore del manifest.
+     * Restituisce il risultato della sonda (null se il pack non ha un server).
+     */
+    public static ServerProbe.Result refreshAuthMode(Pack pack, ServerProbe probe) {
+        if (pack.server == null || pack.server.isBlank()) return null;
+        ServerProbe.Result r = probe.probe(pack.server);
+        if (r.authMode() != null) pack.authMode = r.authMode();
+        return r;
+    }
+
+    /** true se il pack non ha un server o se il server ha risposto (cioè è acceso). */
+    public static boolean serverOnline(ServerProbe.Result r) {
+        return r == null || r.online();
+    }
+
+    public static String offlineMessage(Pack pack) {
+        return "Il server " + (pack.name != null ? pack.name : "") + " (" + pack.server + ") è spento o non raggiungibile.\n"
+                + "Riprova quando è acceso.";
+    }
+
+    /** Testo per il log: cosa ha risposto il server e quale tipo di accesso viene usato. */
+    public static String describeProbe(Pack pack, ServerProbe.Result r) {
+        if (r != null && !r.online()) return "Server " + pack.server + " spento o non raggiungibile (" + r.detail() + ")";
+        if (r == null) return "Nessun server Minecraft indicato: accesso " + (pack.authMode != null ? pack.authMode : "offline");
+        if (r.authMode() != null) return "Server " + pack.server + ": " + r.authMode() + " (" + r.detail() + ")";
+        return "Server " + pack.server + " non verificato (" + r.detail() + "): uso il manifest, accesso "
+                + (pack.authMode != null ? pack.authMode : "offline");
+    }
+
     /** Controlla nome e tipo di account rispetto al server, prima di scaricare qualsiasi cosa. */
     public static void checkAccess(Pack pack, Session session) throws IOException {
         if (!session.premium() && !isValidName(session.name())) {
@@ -30,6 +66,9 @@ public final class LaunchFlow {
 
     public static Prepared prepare(Config cfg, Downloader dl, Pack pack, Session session,
                                    int memoryMb, Progress progress) throws IOException {
+        ServerProbe.Result probe = refreshAuthMode(pack, new ServerProbe(PROBE_TIMEOUT_MS));
+        progress.log(describeProbe(pack, probe));
+        if (!serverOnline(probe)) throw new IOException(offlineMessage(pack));
         checkAccess(pack, session);
 
         Path root = cfg.baseDir;
