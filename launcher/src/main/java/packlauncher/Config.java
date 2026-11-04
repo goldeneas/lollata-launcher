@@ -49,6 +49,25 @@ public final class Config {
 
     public void set(String key, String value) { user.setProperty(key, value); }
 
+    /**
+     * Impostazione di un singolo server (es. nickname o RAM), salvata come
+     * "server.&lt;id&gt;.&lt;chiave&gt;". Se manca si usa il valore globale "&lt;chiave&gt;"
+     * (impostazioni delle versioni precedenti), poi def.
+     */
+    public String getFor(String serverId, String key, String def) {
+        String v = serverId != null ? user.getProperty(serverKey(serverId, key)) : null;
+        return v != null ? v : user.getProperty(key, def);
+    }
+
+    public void setFor(String serverId, String key, String value) {
+        if (value == null) user.remove(serverKey(serverId, key));
+        else user.setProperty(serverKey(serverId, key), value);
+    }
+
+    private static String serverKey(String serverId, String key) {
+        return "server." + serverId + "." + key;
+    }
+
     public void save() throws IOException {
         try (Writer w = Files.newBufferedWriter(userFile, StandardCharsets.UTF_8)) {
             user.store(w, launcherName + " - impostazioni utente");

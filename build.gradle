@@ -3,6 +3,17 @@ subprojects {
     // Codice compilato per Java 17: gira su qualsiasi Java 17+.
     // Il Java per il GIOCO viene invece scaricato in automatico dal launcher.
     tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 17 }
+
+    // Test automatici: gradle test
+    repositories { mavenCentral() }
+    dependencies {
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+    test {
+        useJUnitPlatform()
+        testLogging { events 'failed'; exceptionFormat 'full' }
+    }
 }
 
 // Fat jar: launcher e pack-builder includono il modulo common.

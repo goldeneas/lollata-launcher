@@ -10,7 +10,10 @@ scarica Minecraft, installa NeoForge, sincronizza il modpack ed entra direttamen
 - **Più versioni di Minecraft e loader**: ogni modpack dichiara la sua versione.
   Loader supportati: `neoforge`, `forge`, `fabric`, `quilt`, `vanilla`.
   Supporta sia il formato moderno (1.13+) sia quello vecchio (argomenti in stringa, native da estrarre).
-- Più modpack sullo stesso server (`index.json`), con librerie, asset e runtime Java condivisi.
+- **Più server, ognuno con il suo modpack** (`index.json`): versione di Minecraft, loader, indirizzo
+  e tipo di accesso (premium / non-premium) per ciascuno. L'utente sceglie il server dall'elenco;
+  ogni pack ha la sua istanza e si aggiorna da solo, mentre librerie, asset e runtime Java sono condivisi.
+  Nickname e RAM vengono ricordati per server.
 - Aggiornamenti automatici: a ogni avvio il pack viene confrontato con il server tramite SHA-1.
 - Le mod aggiunte a mano dall'utente e le sue opzioni (`options.txt`) non vengono toccate.
 
@@ -73,19 +76,55 @@ Vengono pubblicati solo i file dentro `.minecraft/` (o `minecraft/` nelle istanz
 
 ### 2. Pubblicare
 
+Ogni server Minecraft ha la sua istanza Prism. Mettile tutte in una cartella, una per server:
+
+```
+~/packs/atm10a/     (instance.cfg, mmc-pack.json, .minecraft/, pack.properties)
+~/packs/svago/
+```
+
+e pubblicale tutte insieme:
+
 ```bash
-java -jar pack-builder.jar ~/packs/atm10a /srv/mcfiles/packs/atm10a --index /srv/mcfiles/packs/index.json
+java -jar pack-builder.jar --all ~/packs /srv/mcfiles/packs
+# oppure: server-example/publish.sh   (stesso comando, con PACKS e WWW modificabili)
 ```
 
 Il comando genera:
 
 ```
-/srv/mcfiles/packs/index.json              elenco dei modpack
+/srv/mcfiles/packs/index.json              elenco dei server (riscritto con esattamente le istanze trovate)
 /srv/mcfiles/packs/atm10a/pack.json        manifest (scritto per ultimo, in modo atomico)
 /srv/mcfiles/packs/atm10a/objects/ab/ab…   file, con nome uguale all'hash
+/srv/mcfiles/packs/svago/...
 ```
 
-Per aggiornare il pack basta modificare la cartella e rilanciare lo stesso comando.
+L'id di ogni server è `id` in `pack.properties` oppure il nome della cartella. Se togli un'istanza
+da `~/packs`, al prossimo `--all` sparisce dall'elenco (i suoi file sul web server restano).
+
+Per pubblicare una sola istanza senza toccare le altre:
+
+```bash
+java -jar pack-builder.jar ~/packs/atm10a /srv/mcfiles/packs/atm10a --index /srv/mcfiles/packs/index.json
+```
+
+Ogni voce di `index.json` contiene nome, indirizzo, versione di Minecraft, loader e `authMode`,
+così il launcher mostra l'elenco senza scaricare ogni manifest:
+
+```json
+{ "formatVersion": 2,
+  "packs": [ { "id": "atm10a", "name": "All the Mods 10 Aeronautics", "url": "atm10a/pack.json",
+               "version": "0.7.1-20261104-1000", "minecraft": "1.21.1",
+               "loader": { "type": "neoforge", "version": "21.1.228" },
+               "server": "mc.lollata.xyz:25565", "authMode": "offline" } ] }
+```
+
+`authMode` è `premium` (serve un account Microsoft), `offline` (basta un nickname) o assente
+(sconosciuto). Si imposta con `authMode=` in `pack.properties`; con `auto` (default) viene chiesto
+al server Minecraft indicato in `server`. I launcher già distribuiti leggono ancora l'indice
+(usano solo `id`, `name` e `url`).
+
+Per aggiornare un pack basta modificare la sua cartella e rilanciare lo stesso comando.
 `--prune` cancella gli oggetti non più usati (usalo quando nessuno sta scaricando).
 
 Esclusi di default: `logs/`, `saves/`, `screenshots/`, `crash-reports/`, `*.log`, ecc.
@@ -148,11 +187,25 @@ whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoFo
 
 1. Serve un Java 17+ qualsiasi solo per aprire il launcher (https://adoptium.net).
    Il Java usato dal gioco lo scarica il launcher da solo.
-2. Apri `launcher.jar` con un doppio clic, inserisci il nome e premi **Gioca**.
+2. Apri `launcher.jar` con un doppio clic, scegli il server (se ce n'è più di uno), inserisci il nome e premi **Gioca**.
+   Sotto l'elenco vedi versione di Minecraft, loader, indirizzo e se serve un account premium.
+   Nome e RAM vengono ricordati separatamente per ogni server.
 
 Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\` (Windows) o `~/.lollata-launcher/` (Linux).
 In caso di crash il launcher propone di aprire il log
 (`instances/<pack>/.packlauncher/game-output.log`).
+
+## Test automatici
+
+```bash
+gradle test
+```
+
+Girano anche in GitHub Actions a ogni push e pull request. Coprono: lettura di `index.json`
+(formato nuovo e vecchio, id pericolosi scartati) e di `pack.json` con `authMode`; impostazioni
+per server (nickname, RAM, ripiego sulle impostazioni vecchie); installazione e aggiornamento di due
+server da un web server HTTP locale (mod aggiornate e tolte, mod dell'utente e `options.txt` intatti,
+pack separati); pack-builder per una istanza e con `--all` (manifest, indice, id duplicati o non validi).
 
 ## Test eseguiti
 
