@@ -13,6 +13,8 @@ import java.util.Properties;
 public final class Config {
     public final String launcherName;
     public final String indexUrl;
+    /** Client id dell'app Azure per il login Microsoft; vuoto = login premium non disponibile. */
+    public final String msaClientId;
     public final Path baseDir;
     private final Properties user = new Properties();
     private final Path userFile;
@@ -24,6 +26,7 @@ public final class Config {
         }
         launcherName = System.getProperty("launcher.name", p.getProperty("launcher.name", "PackLauncher"));
         indexUrl = System.getProperty("index.url", p.getProperty("index.url"));
+        msaClientId = System.getProperty("msa.clientId", p.getProperty("msa.clientId", "")).trim();
         String dir = System.getProperty("launcher.dir", p.getProperty("launcher.dir", "packlauncher"));
         baseDir = Path.of(System.getProperty("launcher.home", defaultBase(dir).toString()));
         Files.createDirectories(baseDir);

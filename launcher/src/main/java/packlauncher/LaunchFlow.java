@@ -19,11 +19,18 @@ public final class LaunchFlow {
 
     public record Prepared(List<String> command, Path instanceDir, Pack pack) {}
 
-    public static Prepared prepare(Config cfg, Downloader dl, Pack pack, String playerName,
-                                   int memoryMb, Progress progress) throws IOException {
-        if (!isValidName(playerName)) {
+    /** Controlla nome e tipo di account rispetto al server, prima di scaricare qualsiasi cosa. */
+    public static void checkAccess(Pack pack, Session session) throws IOException {
+        if (!session.premium() && !isValidName(session.name())) {
             throw new IOException("Nome non valido: 3-16 caratteri, solo lettere, numeri e _");
         }
+        String deny = AccessPolicy.denyReason(pack.authMode, session.premium(), pack.name);
+        if (deny != null) throw new IOException(deny);
+    }
+
+    public static Prepared prepare(Config cfg, Downloader dl, Pack pack, Session session,
+                                   int memoryMb, Progress progress) throws IOException {
+        checkAccess(pack, session);
 
         Path root = cfg.baseDir;
         Path instanceDir = root.resolve("instances").resolve(pack.id);
@@ -55,7 +62,7 @@ public final class LaunchFlow {
         // 6. Comando
         progress.stage("Avvio di Minecraft...");
         List<String> cmd = GameLauncher.buildCommand(inst, profile, pack, instanceDir,
-                playerName, memoryMb, cfg.launcherName, javaExe);
+                session, memoryMb, cfg.launcherName, javaExe);
         return new Prepared(cmd, instanceDir, pack);
     }
 }

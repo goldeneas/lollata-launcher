@@ -16,6 +16,10 @@ subprojects {
     }
 }
 
+// common espone ai test degli altri moduli un server Minecraft finto (src/testFixtures).
+project(':common') { apply plugin: 'java-test-fixtures' }
+project(':pack-builder') { dependencies { testImplementation testFixtures(project(':common')) } }
+
 // Fat jar: launcher e pack-builder includono il modulo common.
 configure([project(':launcher'), project(':pack-builder')]) {
     dependencies { implementation project(':common') }

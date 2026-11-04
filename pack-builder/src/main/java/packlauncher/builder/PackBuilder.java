@@ -143,11 +143,17 @@ public final class PackBuilder {
     }
 
     /**
-     * Stub: il thread "accesso premium" lo sostituisce con la sonda del server Minecraft.
-     * Deve restituire "premium", "offline" oppure null se non si riesce a capirlo.
+     * Chiede al server Minecraft se è in online-mode (vedi {@link AuthProbe}).
+     * Restituisce "premium", "offline" oppure null se non si riesce a capirlo.
      */
     static String detectAuthMode(String server) {
-        return null;
+        String mode = AuthProbe.detectAuthMode(server);
+        if (mode == null) {
+            System.err.println("Attenzione: tipo di accesso di " + server + " non rilevato, il launcher lo tratterà "
+                    + "come \"offline\". Avvia il server e ripubblica, oppure imposta authMode=premium|offline "
+                    + "in pack.properties.");
+        }
+        return mode;
     }
 
     /**
