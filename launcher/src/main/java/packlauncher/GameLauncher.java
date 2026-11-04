@@ -29,7 +29,7 @@ public final class GameLauncher {
     }
 
     public static List<String> buildCommand(GameInstaller inst, GameInstaller.Profile p, Pack pack,
-                                            Path instanceDir, String playerName, int memoryMb,
+                                            Path instanceDir, Session session, int memoryMb,
                                             String launcherName, String javaExe) throws IOException {
         Path natives = inst.versionDir(p.id).resolve("natives");
         inst.extractNatives(p, natives);
@@ -41,21 +41,21 @@ public final class GameLauncher {
         }
         cp.add(p.clientJar.toString());
 
-        String uuid = offlineUuid(playerName).toString().replace("-", "");
         Map<String, String> vars = new HashMap<>();
-        vars.put("auth_player_name", playerName);
+        vars.put("auth_player_name", session.name());
         vars.put("version_name", p.id);
         vars.put("game_directory", instanceDir.toString());
         vars.put("assets_root", inst.assetsDir().toString());
         vars.put("game_assets", p.gameAssets != null ? p.gameAssets.toString() : inst.assetsDir().toString());
         vars.put("assets_index_name", Json.str(p.assetIndex, "id"));
-        vars.put("auth_uuid", uuid);
-        vars.put("auth_access_token", "0");
-        vars.put("auth_session", "0");
+        vars.put("auth_uuid", session.uuid());
+        vars.put("auth_access_token", session.accessToken());
+        // versioni molto vecchie (--session): "token:<accessToken>:<uuid>"
+        vars.put("auth_session", session.premium() ? "token:" + session.accessToken() + ":" + session.uuid() : "0");
         vars.put("user_properties", "{}");
-        vars.put("clientid", "0");
-        vars.put("auth_xuid", "0");
-        vars.put("user_type", "legacy");
+        vars.put("clientid", session.clientId());
+        vars.put("auth_xuid", session.xuid());
+        vars.put("user_type", session.userType());
         vars.put("version_type", p.type != null ? p.type : "release");
         vars.put("natives_directory", natives.toString());
         vars.put("launcher_name", launcherName);

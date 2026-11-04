@@ -10,6 +10,9 @@ import javax.swing.SwingUtilities;
  *   java -jar launcher.jar                       -> interfaccia grafica
  *   java -jar launcher.jar --cli --name Steve    -> da terminale (debug / test)
  *       [--pack <id>] [--pack-url <url>] [--memory <MB>] [--dry-run]
+ *   java -jar launcher.jar --cli --premium [--pack <id>] ...   -> con l'account Microsoft salvato
+ *   java -jar launcher.jar --cli --login                       -> accesso Microsoft (codice da inserire su microsoft.com/link)
+ *   java -jar launcher.jar --cli --logout
  */
 public final class Main {
     public static void main(String[] args) throws Exception {
@@ -20,6 +23,20 @@ public final class Main {
             return;
         }
 
+        List<String> flags = List.of(args);
+        AccountManager accounts = AccountManager.create(cfg);
+        if (flags.contains("--logout")) {
+            accounts.logout();
+            System.out.println("Account Microsoft rimosso.");
+            return;
+        }
+        if (flags.contains("--login")) {
+            Accounts.Account a = accounts.login(dc -> System.out.println(
+                    "Apri " + dc.verificationUri() + " e inserisci il codice: " + dc.userCode()), () -> false);
+            System.out.println("Accesso eseguito: " + a.name());
+            return;
+        }
+        boolean premium = flags.contains("--premium");
         String name = arg(args, "--name", cfg.get("name", null));
         String packId = arg(args, "--pack", null);
         String packUrl = arg(args, "--pack-url", null);
@@ -36,7 +53,8 @@ public final class Main {
         Pack pack = Pack.load(dl, packUrl);
         int memory = mem != null ? Integer.parseInt(mem) : pack.memoryMb;
 
-        LaunchFlow.Prepared prep = LaunchFlow.prepare(cfg, dl, pack, name, memory, Progress.CONSOLE);
+        Session session = premium ? accounts.premiumSession() : Session.offline(name);
+        LaunchFlow.Prepared prep = LaunchFlow.prepare(cfg, dl, pack, session, memory, Progress.CONSOLE);
         if (dryRun) {
             System.out.println(String.join("\n", prep.command()));
             return;

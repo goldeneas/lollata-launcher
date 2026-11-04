@@ -17,8 +17,12 @@ scarica Minecraft, installa NeoForge, sincronizza il modpack ed entra direttamen
 - Aggiornamenti automatici: a ogni avvio il pack viene confrontato con il server tramite SHA-1.
 - Le mod aggiunte a mano dall'utente e le sue opzioni (`options.txt`) non vengono toccate.
 
-> Nota: il launcher usa account **offline** (solo nickname). Il client di Minecraft è
-> software a pagamento e usarlo senza licenza viola l'EULA di Mojang.
+- **Account premium e non-premium**: login Microsoft fatto una volta sola (resta salvato e si rinnova
+  da solo) oppure solo nickname. Il launcher sa quali server richiedono l'account premium
+  e su quelli non lascia giocare con il solo nickname.
+
+> Nota: con il solo nickname (account **offline**) si entra solo nei server con `online-mode=false`.
+> Il client di Minecraft è software a pagamento e usarlo senza licenza viola l'EULA di Mojang.
 
 ## Download
 
@@ -121,7 +125,7 @@ così il launcher mostra l'elenco senza scaricare ogni manifest:
 
 `authMode` è `premium` (serve un account Microsoft), `offline` (basta un nickname) o assente
 (sconosciuto). Si imposta con `authMode=` in `pack.properties`; con `auto` (default) viene chiesto
-al server Minecraft indicato in `server`. I launcher già distribuiti leggono ancora l'indice
+al server Minecraft indicato in `server` (vedi "Rilevamento premium / offline"). I launcher già distribuiti leggono ancora l'indice
 (usano solo `id`, `name` e `url`).
 
 Per aggiornare un pack basta modificare la sua cartella e rilanciare lo stesso comando.
@@ -172,9 +176,13 @@ In alternativa va bene qualsiasi web server statico, ad esempio nginx con
 
 ### 4. Server Minecraft
 
-Nel `server.properties`:
+Ogni server può essere **premium** o **non-premium**, nel suo `server.properties`:
 
 ```properties
+# premium: solo account Microsoft con Minecraft
+online-mode=true
+
+# non-premium: basta un nickname (anche gli account premium possono entrare)
 online-mode=false
 enforce-secure-profile=false
 white-list=true
@@ -183,13 +191,57 @@ white-list=true
 Con `online-mode=false` chiunque può entrare con qualunque nome, anche il tuo. Usa la
 whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoForge 1.21.1.
 
+#### Rilevamento premium / offline
+
+Con `authMode=auto` (il default) il pack-builder, a ogni pubblicazione, si collega al server
+Minecraft indicato in `server` e fa un login di prova con il nome `LollataProbe`:
+
+- se il server chiede la cifratura (Encryption Request) è in `online-mode=true` → `premium`;
+- se il login prosegue senza autenticazione, o il server risponde "non sei in whitelist" → `offline`.
+
+Il nome di prova non entra mai davvero nel mondo. Sui server Forge viene aggiunto il marker FML
+letto dallo status del server. Se il server è spento o la risposta non è chiara, il campo resta
+vuoto (il launcher lo tratta come `offline`) e il builder stampa un avviso: avvia il server e
+ripubblica, oppure scrivi `authMode=premium` o `authMode=offline` in `pack.properties`.
+Se cambi `online-mode` sul server, ripubblica il pack per aggiornare l'indice.
+
+Per controllare un server al volo:
+
+```bash
+java -cp pack-builder.jar packlauncher.builder.AuthProbe mc.lollata.xyz:25565
+```
+
+### 5. Account premium (login Microsoft)
+
+Il login usa il "device code flow": il launcher mostra un codice, l'amico lo inserisce su
+microsoft.com/link con il suo account e torna al launcher. Per attivarlo serve un'app Azure:
+
+1. Su [portal.azure.com](https://portal.azure.com) → *App registrations* → *New registration*.
+   Tipi di account: **solo account Microsoft personali**. Nessun redirect URI.
+2. In *Authentication* attiva **Allow public client flows**.
+3. Chiedi a Mojang l'accesso all'API di Minecraft per quel client id con il modulo
+   <https://aka.ms/mce-reviewappid> (finché non è approvato il login finisce con
+   "Invalid app registration").
+4. Metti il client id (Application ID) in `launcher/src/main/resources/launcher.properties`
+   (`msa.clientId=…`) e ricompila, oppure prova al volo con `-Dmsa.clientId=…`.
+
+Senza client id il launcher funziona come prima, solo con il nickname, e sui server premium
+spiega che il login Microsoft non è disponibile.
+
+Il login vale per tutti i server e resta salvato in `accounts.json` nella cartella dati
+(leggibile solo dall'utente su Linux/macOS): il token di Minecraft dura 24 ore e il launcher lo
+rinnova da solo con il refresh token di Microsoft, quindi l'accesso si rifà solo dopo "Esci" o
+se Microsoft revoca il token (es. password cambiata, 90 giorni senza usarlo).
+
 ## Lato amico
 
 1. Serve un Java 17+ qualsiasi solo per aprire il launcher (https://adoptium.net).
    Il Java usato dal gioco lo scarica il launcher da solo.
-2. Apri `launcher.jar` con un doppio clic, scegli il server (se ce n'è più di uno), inserisci il nome e premi **Gioca**.
+2. Apri `launcher.jar` con un doppio clic e scegli il server (se ce n'è più di uno).
    Sotto l'elenco vedi versione di Minecraft, loader, indirizzo e se serve un account premium.
-   Nome e RAM vengono ricordati separatamente per ogni server.
+3. **Account**: "Non-premium" + nickname, oppure **Accedi con Microsoft** (una volta sola, poi resta salvato).
+   Sui server premium serve l'account Microsoft. Nickname, RAM e account scelto vengono ricordati per ogni server.
+4. Premi **Gioca**.
 
 Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\` (Windows) o `~/.lollata-launcher/` (Linux).
 In caso di crash il launcher propone di aprire il log
@@ -205,7 +257,11 @@ Girano anche in GitHub Actions a ogni push e pull request. Coprono: lettura di `
 (formato nuovo e vecchio, id pericolosi scartati) e di `pack.json` con `authMode`; impostazioni
 per server (nickname, RAM, ripiego sulle impostazioni vecchie); installazione e aggiornamento di due
 server da un web server HTTP locale (mod aggiornate e tolte, mod dell'utente e `options.txt` intatti,
-pack separati); pack-builder per una istanza e con `--all` (manifest, indice, id duplicati o non validi).
+pack separati); pack-builder per una istanza e con `--all` (manifest, indice, id duplicati o non validi);
+rilevamento premium/offline contro un server Minecraft finto (online-mode, offline, whitelist, Forge
+con marker FML, server spento, formato del Login Start per 1.12-1.21); login Microsoft contro servizi
+finti (device code con attesa e slow_down, catena Xbox/XSTS/Minecraft, refresh del token, token revocato,
+account senza Xbox o senza Minecraft); salvataggio dell'account e regole di accesso.
 
 ## Test eseguiti
 
@@ -241,9 +297,13 @@ Per le versioni più vecchie il launcher scarica da solo Java 8 o 17.
 
 ```bash
 java -jar launcher.jar --cli --name Steve [--pack atm10a] [--memory 8192] [--dry-run]
+java -jar launcher.jar --cli --login          # accesso Microsoft (mostra il codice da inserire)
+java -jar launcher.jar --cli --premium [--pack atm10a] [--dry-run]   # gioca con l'account salvato
+java -jar launcher.jar --cli --logout
 ```
 
-Override utili: `-Dindex.url=…` (server alternativo), `-Dlauncher.home=…` (cartella dati).
+Override utili: `-Dindex.url=…` (server alternativo), `-Dlauncher.home=…` (cartella dati),
+`-Dmsa.clientId=…` (client id Azure).
 
 ## Struttura
 
