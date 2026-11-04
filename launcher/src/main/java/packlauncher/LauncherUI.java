@@ -1,6 +1,9 @@
 package packlauncher;
 
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -37,6 +40,8 @@ import packlauncher.common.ServerProbe;
 
 /**
  * Finestra unica: server/modpack, account (Microsoft premium o nickname), RAM, pulsante Gioca.
+ * Mostra solo quello che serve per giocare; versioni e indirizzo sono nel tooltip del server,
+ * il log tecnico sotto "Mostra dettagli".
  * Nickname, RAM e tipo di account scelto sono salvati per server; l'account Microsoft vale per tutti.
  */
 public final class LauncherUI {
@@ -46,18 +51,28 @@ public final class LauncherUI {
     private final JTextField nameField = new JTextField(16);
     private final JLabel nameLabel = new JLabel("Nickname");
     private final AccountManager accounts;
-    /** Voce 0 = nickname offline, voce 1 (se c'è) = account Microsoft salvato. */
+    /** Voce 0 = account Microsoft salvato, voce 1 = nickname offline. Visibile solo con un account salvato. */
     private final JComboBox<String> accountBox = new JComboBox<>();
-    private final JButton accountButton = new JButton();
+    private final JLabel accountLabel = new JLabel("Account");
+    private final JButton loginButton = new JButton("Accedi con Microsoft");
+    private final JButton logoutButton = new JButton("Esci");
+    /** Nickname con "Accedi con Microsoft" accanto; senza nickname il pulsante occupa tutta la riga. */
+    private final JPanel nameRow = row(nameField, loginButton);
+    private final JPanel accountRow = row(accountBox, logoutButton);
     private final JLabel accessHint = new JLabel(" ");
     private final JComboBox<String> packBox = new JComboBox<>();
-    private final JLabel packLabel = new JLabel("Server");
-    private final JLabel packInfo = new JLabel(" ");
+    /** Al posto della tendina quando c'è un solo server. */
+    private final JLabel packName = new JLabel(" ");
     private final JSpinner ramSpinner;
-    private final JButton playButton = new JButton("Gioca");
+    private final JButton playButton = new JButton("Caricamento...");
     private final JProgressBar bar = new JProgressBar();
-    private final JLabel status = new JLabel("Caricamento modpack...");
+    private final JLabel status = new JLabel(" ");
+    /** Sotto "Gioca": l'avviso (server spento, serve premium) oppure, durante l'avvio, barra e stato. */
+    private final CardLayout feedbackCards = new CardLayout();
+    private final JPanel feedback = new JPanel(feedbackCards);
     private final JTextArea logArea = new JTextArea(8, 40);
+    private final JScrollPane logScroll = new JScrollPane(logArea);
+    private final JButton detailsButton = new JButton("Mostra dettagli");
     private List<Pack.Entry> packs = List.of();
     private Pack currentPack;
     /** true mentre si ricostruisce la tendina degli account (i suoi eventi vanno ignorati). */
@@ -85,61 +100,103 @@ public final class LauncherUI {
         int maxGb = Math.max(2, (int) (totalRamMb() / 1024) - 1);
         ramSpinner = new JSpinner(new SpinnerNumberModel(Math.min(4, maxGb), 2, maxGb, 1));
 
-        JLabel title = new JLabel(cfg.launcherName);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f));
-
         JPanel form = new JPanel(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 4, 4, 4);
+        c.insets = new Insets(5, 4, 5, 4);
         c.anchor = GridBagConstraints.WEST;
-        c.gridx = 0; c.gridy = 0; c.gridwidth = 2; form.add(title, c);
-        c.gridwidth = 1;
-        c.gridy = 1; form.add(packLabel, c);
-        c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; c.weightx = 1; form.add(packBox, c);
-        c.gridy = 2; form.add(packInfo, c);
-        JPanel accountRow = new JPanel(new BorderLayout(6, 0));
-        accountRow.add(accountBox, BorderLayout.CENTER);
-        accountRow.add(accountButton, BorderLayout.EAST);
-        c.gridx = 0; c.gridy = 3; c.fill = GridBagConstraints.NONE; c.weightx = 0; form.add(new JLabel("Account"), c);
-        c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; form.add(accountRow, c);
-        c.gridx = 0; c.gridy = 4; c.fill = GridBagConstraints.NONE; form.add(nameLabel, c);
-        c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; form.add(nameField, c);
-        c.gridx = 0; c.gridy = 5; c.fill = GridBagConstraints.NONE; form.add(new JLabel("RAM (GB)"), c);
-        c.gridx = 1; form.add(ramSpinner, c);
-        c.gridx = 0; c.gridy = 6; c.gridwidth = 2; c.fill = GridBagConstraints.HORIZONTAL; form.add(accessHint, c);
-        c.gridy = 7; form.add(playButton, c);
-        c.gridy = 8; form.add(bar, c);
-        c.gridy = 9; form.add(status, c);
+        JPanel packRow = new JPanel(new BorderLayout());
+        packRow.add(packBox, BorderLayout.CENTER);
+        packName.setFont(packName.getFont().deriveFont(Font.BOLD));
+        packName.setVisible(false);
+        packRow.add(packName, BorderLayout.WEST);
+        addRow(form, c, 0, new JLabel("Server"), packRow);
+        addRow(form, c, 1, accountLabel, accountRow);
+        addRow(form, c, 2, nameLabel, nameRow);
+        JPanel ramRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        ramRow.add(ramSpinner);
+        ramRow.add(new JLabel("  GB"));
+        addRow(form, c, 3, new JLabel("RAM"), ramRow);
+
+        c.gridx = 0; c.gridy = 4; c.gridwidth = 2; c.fill = GridBagConstraints.HORIZONTAL;
+        c.insets = new Insets(12, 4, 4, 4);
+        form.add(playButton, c);
+        JPanel progress = new JPanel(new BorderLayout(0, 4));
+        progress.add(bar, BorderLayout.NORTH);
+        progress.add(status, BorderLayout.CENTER);
+        feedback.add(accessHint, "hint");
+        feedback.add(progress, "progress");
+        c.gridy = 5; c.insets = new Insets(4, 4, 4, 4);
+        form.add(feedback, c);
 
         playButton.setFont(playButton.getFont().deriveFont(Font.BOLD, 16f));
-        playButton.setPreferredSize(new Dimension(200, 40));
+        playButton.setPreferredSize(new Dimension(200, 44));
         playButton.setEnabled(false);
         playButton.addActionListener(e -> play());
         nameField.setText(cfg.get("name", ""));
         nameField.addActionListener(e -> play());
         accountBox.addActionListener(e -> { if (!refreshingAccounts) onAccountChosen(); });
-        accountButton.addActionListener(e -> {
-            if (accounts.current() != null) logout(); else login();
-        });
-        accessHint.setFont(accessHint.getFont().deriveFont(Font.PLAIN, 11f));
+        loginButton.addActionListener(e -> login());
+        logoutButton.addActionListener(e -> logout());
+        accessHint.setFont(accessHint.getFont().deriveFont(Font.PLAIN, 12f));
+        status.setFont(status.getFont().deriveFont(Font.PLAIN, 12f));
         refreshAccounts();
         new javax.swing.Timer(RECHECK_S * 1000, e -> recheckServer()).start();
-        packBox.addActionListener(e -> loadSelectedPack());
-        packInfo.setFont(packInfo.getFont().deriveFont(Font.PLAIN, 11f));
 
+        // Log tecnico: nascosto, si apre a richiesta (gli errori arrivano comunque in una finestra)
         logArea.setEditable(false);
         logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-        JScrollPane scroll = new JScrollPane(logArea);
-        scroll.setBorder(BorderFactory.createTitledBorder("Dettagli"));
+        logScroll.setVisible(false);
+        detailsButton.setBorderPainted(false);
+        detailsButton.setContentAreaFilled(false);
+        detailsButton.setFocusPainted(false);
+        detailsButton.setMargin(new Insets(0, 0, 0, 0));
+        detailsButton.setForeground(Color.GRAY);
+        detailsButton.setFont(detailsButton.getFont().deriveFont(Font.PLAIN, 11f));
+        detailsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        detailsButton.addActionListener(e -> toggleDetails());
+        JPanel details = new JPanel(new BorderLayout(0, 4));
+        details.add(logScroll, BorderLayout.CENTER);
+        JPanel detailsLink = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        detailsLink.add(detailsButton);
+        details.add(detailsLink, BorderLayout.NORTH);
 
-        JPanel root = new JPanel(new BorderLayout(8, 8));
-        root.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        JPanel root = new JPanel(new BorderLayout(8, 4));
+        root.setBorder(BorderFactory.createEmptyBorder(14, 14, 8, 14));
         root.add(form, BorderLayout.NORTH);
-        root.add(scroll, BorderLayout.CENTER);
+        root.add(details, BorderLayout.CENTER);
         frame.setContentPane(root);
         frame.pack();
-        frame.setMinimumSize(new Dimension(460, 420));
+        frame.setSize(Math.max(420, frame.getWidth()), frame.getHeight());
+        frame.setMinimumSize(new Dimension(380, 0));
         frame.setLocationRelativeTo(null);
+    }
+
+    private static void addRow(JPanel form, GridBagConstraints c, int y, JLabel label, java.awt.Component field) {
+        c.gridy = y; c.gridwidth = 1;
+        c.gridx = 0; c.fill = GridBagConstraints.NONE; c.weightx = 0; form.add(label, c);
+        c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; c.weightx = 1; form.add(field, c);
+    }
+
+    private static JPanel row(java.awt.Component main, java.awt.Component side) {
+        JPanel p = new JPanel(new BorderLayout(6, 0));
+        p.add(main, BorderLayout.CENTER);
+        p.add(side, BorderLayout.EAST);
+        return p;
+    }
+
+    private void toggleDetails() {
+        boolean show = !logScroll.isVisible();
+        logScroll.setVisible(show);
+        detailsButton.setText(show ? "Nascondi dettagli" : "Mostra dettagli");
+        relayout();
+    }
+
+    /** Adatta l'altezza della finestra alle righe visibili (la larghezza scelta dall'utente resta). */
+    private void relayout() {
+        if (frame.getPreferredSize().height == frame.getHeight()) return;
+        int w = frame.getWidth();
+        frame.pack();
+        if (w > frame.getWidth()) frame.setSize(w, frame.getHeight());
     }
 
     public void show() {
@@ -151,9 +208,16 @@ public final class LauncherUI {
                 String last = cfg.get("pack", "");
                 for (Pack.Entry e : packs) packBox.addItem(e.name());
                 for (int i = 0; i < packs.size(); i++) if (packs.get(i).id().equals(last)) packBox.setSelectedIndex(i);
-                packBox.setEnabled(packs.size() > 1);
-                if (packs.isEmpty()) status.setText("Nessun server disponibile.");
-                else loadSelectedPack();
+                packBox.addActionListener(e -> loadSelectedPack());
+                boolean single = packs.size() == 1;
+                packBox.setVisible(!single);
+                packName.setVisible(single);
+                if (packs.isEmpty()) {
+                    playButton.setText("Gioca");
+                    accessHint.setText("Nessun server disponibile.");
+                } else {
+                    loadSelectedPack();
+                }
             });
         });
     }
@@ -166,11 +230,10 @@ public final class LauncherUI {
         currentPack = null;
         serverOnline = true;
         playButton.setEnabled(false);
-        packInfo.setText(infoText(entry.summary(), entry.server(), entry.authMode()));
+        showPackInfo(entry.name(), entry.summary(), entry.server());
         // Nome e RAM salvati per questo server (o quelli globali delle versioni precedenti)
         nameField.setText(cfg.getFor(entry.id(), "name", ""));
         selectAccountFor(entry.id(), entry.authMode());
-        status.setText("Carico " + entry.name() + "...");
         background(() -> {
             Pack p = Pack.load(dl, entry.url());
             // online-mode letto ora dal server: vale anche se è cambiato dopo l'ultima pubblicazione
@@ -184,7 +247,6 @@ public final class LauncherUI {
                 try { want = Integer.parseInt(cfg.getFor(p.id, "memoryGb", Integer.toString(want))); }
                 catch (NumberFormatException ignored) {}
                 ramSpinner.setValue(Math.max(2, Math.min(want, (Integer) m.getMaximum())));
-                status.setText(p.name + " v" + p.version + " - pronto");
                 showProbe(p, probe);
             });
         });
@@ -254,10 +316,13 @@ public final class LauncherUI {
         playButton.setEnabled(!busy);
         nameField.setEnabled(!busy);
         accountBox.setEnabled(!busy);
-        accountButton.setEnabled(!busy && accounts.premiumAvailable());
-        packBox.setEnabled(!busy && packs.size() > 1);
+        loginButton.setEnabled(!busy);
+        logoutButton.setEnabled(!busy);
+        packBox.setEnabled(!busy);
         ramSpinner.setEnabled(!busy);
-        if (!busy) { bar.setIndeterminate(false); bar.setValue(0); updateAccess(); }
+        feedbackCards.show(feedback, busy ? "progress" : "hint");
+        if (busy) { status.setText("Preparazione..."); bar.setIndeterminate(true); }
+        else { bar.setIndeterminate(false); bar.setValue(0); updateAccess(); }
     }
 
     // ------------------------------------------------------ server acceso?
@@ -281,14 +346,14 @@ public final class LauncherUI {
     /** Mostra cosa ha risposto il server e aggiorna dati del pack, account e "Gioca". */
     private void showProbe(Pack p, ServerProbe.Result r) {
         logArea.append(LaunchFlow.describeProbe(p, r) + "\n");
-        packInfo.setText(infoText(p.summary(), p.server, p.authMode));
+        showPackInfo(p.name, p.summary(), p.server);
         selectAccountFor(p.id, p.authMode);   // chiama anche updateAccess()
     }
 
     // ------------------------------------------------------------ account
 
     private boolean premiumSelected() {
-        return accounts.current() != null && accountBox.getSelectedIndex() == 1;
+        return accounts.current() != null && accountBox.getSelectedIndex() == 0;
     }
 
     /** Ricostruisce la tendina degli account dopo login/logout. */
@@ -296,14 +361,12 @@ public final class LauncherUI {
         Accounts.Account acc = accounts.current();
         refreshingAccounts = true;
         accountBox.removeAllItems();
-        accountBox.addItem("Non-premium (solo nickname)");
-        if (acc != null) accountBox.addItem("Microsoft: " + acc.name());
-        refreshingAccounts = false;
-        accountButton.setText(acc != null ? "Esci" : "Accedi con Microsoft");
-        accountButton.setEnabled(accounts.premiumAvailable() && !busyNow);
-        if (!accounts.premiumAvailable()) {
-            accountButton.setToolTipText("Login Microsoft non configurato in questa versione del launcher");
+        if (acc != null) {
+            accountBox.addItem(acc.name() + " (Microsoft)");
+            accountBox.addItem("Nickname (non-premium)");
         }
+        refreshingAccounts = false;
+        loginButton.setEnabled(!busyNow);
         Pack.Entry e = selectedEntry();
         selectAccountFor(e != null ? e.id() : null, currentAuthMode());
     }
@@ -314,16 +377,29 @@ public final class LauncherUI {
         String saved = serverId != null ? cfg.getFor(serverId, "account", null) : null;
         boolean premium = hasPremium && (Minecraft.PREMIUM.equals(authMode) || !Minecraft.OFFLINE.equals(saved));
         refreshingAccounts = true;
-        accountBox.setSelectedIndex(premium ? 1 : 0);
+        if (hasPremium) accountBox.setSelectedIndex(premium ? 0 : 1);
         refreshingAccounts = false;
         onAccountChosen();
     }
 
     private void onAccountChosen() {
-        boolean premium = premiumSelected();
-        nameLabel.setVisible(!premium);
-        nameField.setVisible(!premium);
+        boolean hasAccount = accounts.current() != null;
+        boolean premiumServer = Minecraft.PREMIUM.equals(currentAuthMode());
+        // Senza account Microsoft: nickname e, se il login è configurato, "Accedi con Microsoft" accanto.
+        // Con l'account: tendina account/nickname ed "Esci"; il nickname solo se scelto.
+        // Su un server premium senza account il nickname non serve: resta solo il pulsante di accesso.
+        boolean showLogin = !hasAccount && accounts.premiumAvailable();
+        boolean showName = !premiumSelected() && !(premiumServer && !hasAccount);
+        accountLabel.setVisible(hasAccount);
+        accountRow.setVisible(hasAccount);
+        nameField.setVisible(showName);
+        loginButton.setVisible(showLogin);
+        nameRow.add(loginButton, showName ? BorderLayout.EAST : BorderLayout.CENTER);
+        nameLabel.setText(showName ? "Nickname" : "Account");
+        nameLabel.setVisible(showName || showLogin);
+        nameRow.setVisible(showName || showLogin);
         updateAccess();
+        relayout();
     }
 
     /** Abilita "Gioca" solo se l'account scelto può entrare nel server selezionato. */
@@ -332,17 +408,20 @@ public final class LauncherUI {
         boolean premium = premiumSelected();
         String authMode = currentAuthMode();
         boolean ok = AccessPolicy.canJoin(authMode, premium) && serverOnline;
+        String hint;
         if (!serverOnline) {
-            accessHint.setText("<html><b>Il server Minecraft è spento o non raggiungibile.</b> "
-                    + "Riprovo da solo ogni " + RECHECK_S + " secondi.</html>");
+            hint = "Il server è spento o non raggiungibile. Riprovo ogni " + RECHECK_S + " secondi.";
         } else if (ok) {
-            accessHint.setText(" ");
+            hint = " ";
+        } else if (accounts.current() != null) {
+            hint = "Questo server accetta solo account premium: scegli l'account Microsoft.";
         } else if (accounts.premiumAvailable()) {
-            accessHint.setText("<html><b>Questo server richiede un account premium:</b> premi \"Accedi con Microsoft\".</html>");
+            hint = "Questo server accetta solo account premium: accedi con Microsoft.";
         } else {
-            accessHint.setText("<html><b>Questo server richiede un account premium</b>, "
-                    + "ma questa versione del launcher non ha il login Microsoft configurato.</html>");
+            hint = "Questo server accetta solo account premium, ma questa versione del launcher non ha il login Microsoft.";
         }
+        accessHint.setText(hint.isBlank() ? " " : "<html>" + hint + "</html>");
+        playButton.setText(currentPack == null ? "Caricamento..." : serverOnline ? "Gioca" : "Server spento");
         playButton.setEnabled(currentPack != null && ok);
     }
 
@@ -389,7 +468,7 @@ public final class LauncherUI {
         dialog.setSize(440, 200);
         dialog.setLocationRelativeTo(frame);
         dialog.setVisible(true);
-        accountButton.setEnabled(false);
+        loginButton.setEnabled(false);
 
         daemon("msa-login", () -> {
             try {
@@ -427,13 +506,15 @@ public final class LauncherUI {
         });
     }
 
-    private static String infoText(String summary, String server, String authMode) {
-        StringBuilder sb = new StringBuilder("<html>");
-        sb.append(summary == null || summary.isEmpty() ? "&nbsp;" : summary);
-        if (server != null && !server.isBlank()) sb.append("<br>Indirizzo: ").append(server);
-        if (Minecraft.PREMIUM.equals(authMode)) sb.append("<br>Richiede un account Microsoft (premium)");
-        else if (Minecraft.OFFLINE.equals(authMode)) sb.append("<br>Basta un nickname (non-premium)");
-        return sb.append("</html>").toString();
+    /** Nome del server; versione e indirizzo solo nel tooltip, per chi li cerca. */
+    private void showPackInfo(String name, String summary, String server) {
+        packName.setText(name);
+        StringBuilder tip = new StringBuilder("<html>");
+        if (summary != null && !summary.isEmpty()) tip.append(summary).append("<br>");
+        if (server != null && !server.isBlank()) tip.append(server);
+        String t = tip.length() > 6 ? tip.append("</html>").toString() : null;
+        packBox.setToolTipText(t);
+        packName.setToolTipText(t);
     }
 
     private Progress uiProgress() {
@@ -471,6 +552,10 @@ public final class LauncherUI {
                 SwingUtilities.invokeLater(() -> {
                     setBusy(false);
                     status.setText("Errore: " + e.getMessage());
+                    if (currentPack == null) {   // server/modpack non caricato: lo si dice sotto "Gioca"
+                        playButton.setText("Gioca");
+                        accessHint.setText("<html>Impossibile caricare il server: " + e.getMessage() + "</html>");
+                    }
                     logArea.append("ERRORE: " + e + "\n");
                     JOptionPane.showMessageDialog(frame, e.getMessage(), "Errore", JOptionPane.ERROR_MESSAGE);
                 });
