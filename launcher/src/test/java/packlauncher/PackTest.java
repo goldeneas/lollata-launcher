@@ -6,6 +6,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import packlauncher.common.Minecraft;
+
 class PackTest {
     private static final String INDEX_URL = "https://mcfiles.example/packs/index.json";
 
@@ -30,12 +32,12 @@ class PackTest {
         assertEquals("neoforge", a.loaderType());
         assertEquals("21.1.228", a.loaderVersion());
         assertEquals("mc.example:25565", a.server());
-        assertEquals(Pack.AUTH_PREMIUM, a.authMode());
+        assertEquals(Minecraft.PREMIUM, a.authMode());
         assertEquals("Minecraft 1.21.1 - neoforge 21.1.228", a.summary());
 
         Pack.Entry b = e.get(1);
         assertEquals("https://altro.example/v/pack.json", b.url(), "url assoluti restano invariati");
-        assertEquals(Pack.AUTH_OFFLINE, b.authMode(), "authMode non sensibile a maiuscole");
+        assertEquals(Minecraft.OFFLINE, b.authMode(), "authMode non sensibile a maiuscole");
         assertEquals("Minecraft 1.20.1", b.summary(), "vanilla non mostra il loader");
     }
 
@@ -72,7 +74,7 @@ class PackTest {
                   "server": "mc.example:25565", "authMode": "premium", "memoryMb": 6144,
                   "files": [ { "path": "mods/a.jar", "sha1": "abcdef", "size": 3 } ] }
                 """, "https://mcfiles.example/packs/atm10a/pack.json");
-        assertTrue(p.requiresPremium());
+        assertEquals(Minecraft.PREMIUM, p.authMode);
         assertEquals(6144, p.memoryMb);
         assertEquals("https://mcfiles.example/packs/atm10a/objects/ab/abcdef", p.objectUrl("abcdef"));
     }
@@ -82,7 +84,7 @@ class PackTest {
         for (String v : new String[] { null, "", "auto", "boh" }) assertNull(Pack.normalizeAuth(v), String.valueOf(v));
         Pack p = Pack.parse("{\"id\":\"x\",\"minecraft\":\"1.21.1\"}", "https://h/x/pack.json");
         assertNull(p.authMode);
-        assertFalse(p.requiresPremium());
+
     }
 
     @Test

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+import packlauncher.common.Minecraft;
 import packlauncher.common.ServerProbe;
 
 /** Il flusso completo: pack -> vanilla -> Java -> loader -> librerie/asset -> sync -> comando. */
@@ -19,10 +20,18 @@ public final class LaunchFlow {
         return name != null && VALID_NAME.matcher(name).matches();
     }
 
-    public record Prepared(List<String> command, Path instanceDir, Pack pack) {}
+    public record Prepared(List<String> command, Path instanceDir) {
+        /** Dove finisce l'output del gioco (vedi {@link GameLauncher#start}). */
+        public Path gameLog() { return GameLauncher.outputLog(instanceDir); }
+    }
 
     /** Attesa massima per la sonda del server Minecraft prima di ripiegare sul manifest. */
     public static final int PROBE_TIMEOUT_MS = 3000;
+
+    /** {@link #refreshAuthMode(Pack, ServerProbe)} con il timeout di {@link #PROBE_TIMEOUT_MS}. */
+    public static ServerProbe.Result refreshAuthMode(Pack pack) {
+        return refreshAuthMode(pack, new ServerProbe(PROBE_TIMEOUT_MS));
+    }
 
     /**
      * Chiede direttamente al server Minecraft se è premium o offline, così un cambio di online-mode
@@ -30,7 +39,7 @@ public final class LaunchFlow {
      * Restituisce il risultato della sonda (null se il pack non ha un server).
      */
     public static ServerProbe.Result refreshAuthMode(Pack pack, ServerProbe probe) {
-        if (pack.server == null || pack.server.isBlank()) return null;
+        if (!pack.hasServer()) return null;
         ServerProbe.Result r = probe.probe(pack.server);
         if (r.authMode() != null) pack.authMode = r.authMode();
         return r;
@@ -48,11 +57,11 @@ public final class LaunchFlow {
 
     /** Testo per il log: cosa ha risposto il server e quale tipo di accesso viene usato. */
     public static String describeProbe(Pack pack, ServerProbe.Result r) {
-        if (r != null && !r.online()) return "Server " + pack.server + " spento o non raggiungibile (" + r.detail() + ")";
-        if (r == null) return "Nessun server Minecraft indicato: accesso " + (pack.authMode != null ? pack.authMode : "offline");
+        String access = pack.authMode != null ? pack.authMode : Minecraft.OFFLINE;
+        if (r == null) return "Nessun server Minecraft indicato: accesso " + access;
+        if (!r.online()) return "Server " + pack.server + " spento o non raggiungibile (" + r.detail() + ")";
         if (r.authMode() != null) return "Server " + pack.server + ": " + r.authMode() + " (" + r.detail() + ")";
-        return "Server " + pack.server + " non verificato (" + r.detail() + "): uso il manifest, accesso "
-                + (pack.authMode != null ? pack.authMode : "offline");
+        return "Server " + pack.server + " non verificato (" + r.detail() + "): uso il manifest, accesso " + access;
     }
 
     /** Controlla nome e tipo di account rispetto al server, prima di scaricare qualsiasi cosa. */
@@ -66,7 +75,7 @@ public final class LaunchFlow {
 
     public static Prepared prepare(Config cfg, Downloader dl, Pack pack, Session session,
                                    int memoryMb, Progress progress) throws IOException {
-        ServerProbe.Result probe = refreshAuthMode(pack, new ServerProbe(PROBE_TIMEOUT_MS));
+        ServerProbe.Result probe = refreshAuthMode(pack);
         progress.log(describeProbe(pack, probe));
         if (!serverOnline(probe)) throw new IOException(offlineMessage(pack));
         checkAccess(pack, session);
@@ -81,17 +90,15 @@ public final class LaunchFlow {
         Map<String, Object> vanilla = inst.installVanilla(pack.minecraft);
 
         // 2. Java giusto per questa versione di Minecraft (scaricato in automatico)
-        String[] java = GameInstaller.javaFor(vanilla);
-        String javaExe = runtimes.ensure(java[0], Integer.parseInt(java[1]));
+        JavaRuntime.Version java = GameInstaller.javaFor(vanilla);
+        String javaExe = runtimes.ensure(java);
 
         // 3. Mod loader
         String versionId = inst.installLoader(pack.loaderType, pack.loaderVersion, pack.minecraft, javaExe);
 
         // 4. Profilo, librerie e asset
         GameInstaller.Profile profile = inst.resolve(versionId);
-        if (profile.javaMajor != Integer.parseInt(java[1])) {
-            javaExe = runtimes.ensure(profile.javaComponent, profile.javaMajor);
-        }
+        if (profile.java.major() != java.major()) javaExe = runtimes.ensure(profile.java);
         inst.downloadLibraries(profile);
         inst.downloadAssets(profile, instanceDir);
 
@@ -102,6 +109,6 @@ public final class LaunchFlow {
         progress.stage("Avvio di Minecraft...");
         List<String> cmd = GameLauncher.buildCommand(inst, profile, pack, instanceDir,
                 session, memoryMb, cfg.launcherName, javaExe);
-        return new Prepared(cmd, instanceDir, pack);
+        return new Prepared(cmd, instanceDir);
     }
 }

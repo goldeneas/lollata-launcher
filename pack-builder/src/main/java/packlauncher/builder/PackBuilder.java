@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -21,6 +22,7 @@ import java.util.stream.Stream;
 
 import packlauncher.common.Hashing;
 import packlauncher.common.Json;
+import packlauncher.common.Minecraft;
 
 /**
  * Genera pack.json + objects/ a partire da un'istanza di Prism Launcher.
@@ -49,7 +51,6 @@ public final class PackBuilder {
     private static final List<String> DEFAULT_ONCE = List.of(
             "options.txt", "optionsof.txt", "optionsshaders.txt", "servers.dat");
 
-    private static final java.util.regex.Pattern VALID_ID = java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
     private static final String USAGE = """
             Uso:
               java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]
@@ -93,23 +94,23 @@ public final class PackBuilder {
             instances = s.filter(d -> Files.isRegularFile(d.resolve("mmc-pack.json"))).sorted().toList();
         }
         if (instances.isEmpty()) throw new IOException("Nessuna istanza Prism (con mmc-pack.json) in " + root);
-        List<Map<String, Object>> built = new ArrayList<>();
-        Set<String> ids = new HashSet<>();
+        // Prima tutti gli id, così un doppione blocca tutto prima di pubblicare qualcosa.
+        Map<String, Path> byId = new LinkedHashMap<>();
         for (Path inst : instances) {
             String id = readId(inst);
-            if (!ids.add(id)) throw new IllegalArgumentException("Id duplicato '" + id + "' (" + inst + ")");
+            if (byId.putIfAbsent(id, inst) != null) throw new IllegalArgumentException("Id duplicato '" + id + "' (" + inst + ")");
         }
-        for (Path inst : instances) {
-            String id = readId(inst);
-            System.out.println("== " + inst.getFileName() + " -> " + id);
-            built.add(build(inst, www.resolve(id), null, prune));
+        List<Map<String, Object>> built = new ArrayList<>();
+        for (Map.Entry<String, Path> e : byId.entrySet()) {
+            System.out.println("== " + e.getValue().getFileName() + " -> " + e.getKey());
+            built.add(build(e.getValue(), www.resolve(e.getKey()), null, prune));
         }
         Path index = www.resolve("index.json");
         Set<String> previous = new HashSet<>();
         if (Files.exists(index)) {
             for (Object p : Json.arr(Json.parseObject(Files.readString(index)), "packs")) previous.add(Json.str(p, "id"));
         }
-        previous.removeAll(ids);
+        previous.removeAll(byId.keySet());
         for (String gone : previous) {
             System.out.println("Tolto dall'indice (istanza non più presente): " + gone + "  (i file in " + www.resolve(gone) + " restano)");
         }
@@ -127,8 +128,8 @@ public final class PackBuilder {
     static String readId(Path instance) throws IOException {
         Properties props = loadProps(instance.resolve("pack.properties"));
         String id = blankToNull(props.getProperty("id"));
-        if (id == null) id = instance.getFileName().toString().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]+", "-");
-        if (!VALID_ID.matcher(id).matches()) {
+        if (id == null) id = instance.getFileName().toString().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]+", "-");
+        if (!Minecraft.isValidId(id)) {
             throw new IllegalArgumentException("Id non valido '" + id + "': usa lettere, numeri, '_', '-' o '.'");
         }
         return id;
@@ -140,20 +141,6 @@ public final class PackBuilder {
             try (Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { props.load(r); }
         }
         return props;
-    }
-
-    /**
-     * Chiede al server Minecraft se è in online-mode (vedi {@link AuthProbe}).
-     * Restituisce "premium", "offline" oppure null se non si riesce a capirlo.
-     */
-    static String detectAuthMode(String server) {
-        String mode = AuthProbe.detectAuthMode(server);
-        if (mode == null) {
-            System.err.println("Attenzione: tipo di accesso di " + server + " non rilevato, il launcher lo tratterà "
-                    + "come \"offline\". Avvia il server e ripubblica, oppure imposta authMode=premium|offline "
-                    + "in pack.properties.");
-        }
-        return mode;
     }
 
     /**
@@ -177,26 +164,18 @@ public final class PackBuilder {
         // Versione di Minecraft e loader da mmc-pack.json
         String detectedMc = null, detectedLoader = null, detectedLoaderType = null;
         Map<String, Object> mmc = Json.parseObject(Files.readString(mmcPack, StandardCharsets.UTF_8));
-        List<Object> components = Json.arr(mmc, "components");
-        if (components != null) {
-            for (Object c : components) {
-                String uid = Json.str(c, "uid");
-                String ver = Json.str(c, "version");
-                if (uid == null || ver == null) continue;
-                String type = PRISM_LOADERS.get(uid);
-                if (uid.equals("net.minecraft")) detectedMc = ver;
-                else if (type != null) { detectedLoaderType = type; detectedLoader = ver; }
-            }
+        for (Object c : Json.arr(mmc, "components")) {
+            String uid = Json.str(c, "uid");
+            String ver = Json.str(c, "version");
+            if (uid == null || ver == null) continue;
+            String type = PRISM_LOADERS.get(uid);
+            if (uid.equals("net.minecraft")) detectedMc = ver;
+            else if (type != null) { detectedLoaderType = type; detectedLoader = ver; }
         }
         // Nome e versione del modpack da instance.cfg
-        String detectedName = null, detectedVersion = null;
-        Path cfg = instance.resolve("instance.cfg");
-        if (Files.exists(cfg)) {
-            Properties ic = new Properties();
-            try (Reader r = Files.newBufferedReader(cfg, StandardCharsets.UTF_8)) { ic.load(r); }
-            detectedName = blankToNull(ic.getProperty("name"));
-            detectedVersion = blankToNull(ic.getProperty("ManagedPackVersionName"));
-        }
+        Properties ic = loadProps(instance.resolve("instance.cfg"));
+        String detectedName = blankToNull(ic.getProperty("name"));
+        String detectedVersion = blankToNull(ic.getProperty("ManagedPackVersionName"));
 
         String id = readId(instance);
         String name = props.getProperty("name", detectedName != null ? detectedName : id);
@@ -284,16 +263,20 @@ public final class PackBuilder {
 
     /** authMode da pack.properties: premium | offline | auto (default: chiede al server Minecraft). */
     static String resolveAuthMode(String configured, String server) {
-        String v = configured == null || configured.isBlank() ? "auto" : configured.trim().toLowerCase(java.util.Locale.ROOT);
+        String v = configured == null || configured.isBlank() ? "auto" : configured.trim().toLowerCase(Locale.ROOT);
         switch (v) {
-            case "premium": case "offline": return v;
-            case "auto":
-                if (server == null) return null;
-                String detected = detectAuthMode(server);
-                return "premium".equals(detected) || "offline".equals(detected) ? detected : null;
-            default:
-                throw new IllegalArgumentException("authMode non valido: " + configured + " (premium | offline | auto)");
+            case Minecraft.PREMIUM, Minecraft.OFFLINE: return v;
+            case "auto": break;
+            default: throw new IllegalArgumentException("authMode non valido: " + configured + " (premium | offline | auto)");
         }
+        if (server == null) return null;
+        String detected = AuthProbe.detectAuthMode(server);
+        if (detected == null) {
+            System.err.println("Attenzione: tipo di accesso di " + server + " non rilevato, il launcher lo tratterà "
+                    + "come \"offline\". Avvia il server e ripubblica, oppure imposta authMode=premium|offline "
+                    + "in pack.properties.");
+        }
+        return detected;
     }
 
     private static void writeAtomic(Path file, String content) throws IOException {
@@ -326,7 +309,6 @@ public final class PackBuilder {
             if (id.equals(Json.str(packs.get(i), "id"))) { packs.set(i, e); replaced = true; break; }
         }
         if (!replaced) packs.add(e);
-        idx.put("packs", packs);
         writeAtomic(index, Json.write(idx));
         System.out.println("Aggiornato " + index);
     }
@@ -344,11 +326,9 @@ public final class PackBuilder {
     }
 
     private static List<PathMatcher> matchers(List<String> defaults, String extra) {
-        List<PathMatcher> out = new ArrayList<>();
         List<String> all = new ArrayList<>(defaults);
         for (String s : extra.split(",")) if (!s.isBlank()) all.add(s.trim());
-        for (String g : all) out.add(FileSystems.getDefault().getPathMatcher("glob:" + g));
-        return out;
+        return all.stream().map(g -> FileSystems.getDefault().getPathMatcher("glob:" + g)).toList();
     }
 
     private static boolean matchesAny(List<PathMatcher> ms, Path p) {

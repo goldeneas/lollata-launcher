@@ -2,7 +2,6 @@ package packlauncher;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -11,22 +10,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import packlauncher.common.Json;
+import packlauncher.common.Minecraft;
 
 /** Costruisce la riga di comando e avvia il gioco. */
 public final class GameLauncher {
     private static final Pattern VAR = Pattern.compile("\\$\\{([a-zA-Z0-9_]+)}");
 
     private GameLauncher() {}
-
-    /** UUID offline, identico a quello che calcola il server in online-mode=false. */
-    public static UUID offlineUuid(String name) {
-        return UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
-    }
 
     public static List<String> buildCommand(GameInstaller inst, GameInstaller.Profile p, Pack pack,
                                             Path instanceDir, Session session, int memoryMb,
@@ -65,7 +59,7 @@ public final class GameLauncher {
         vars.put("library_directory", inst.librariesDir().toString());
         vars.put("quickPlayMultiplayer", pack.server != null ? pack.server : "");
 
-        boolean hasServer = pack.server != null && !pack.server.isBlank();
+        boolean hasServer = pack.hasServer();
         boolean quickPlay = p.legacyGameArgs == null && hasQuickPlay(p.gameArgs);
         Map<String, Boolean> features = new HashMap<>();
         features.put("is_quick_play_multiplayer", hasServer && quickPlay);
@@ -84,8 +78,7 @@ public final class GameLauncher {
             cmd.addAll(expand(p.jvmArgs, vars, features));
         }
         if (p.logging != null) {
-            Path cfg = inst.assetsDir().resolve("log_configs").resolve(Json.str(Json.obj(p.logging, "file"), "id"));
-            cmd.add(Json.str(p.logging, "argument").replace("${path}", cfg.toString()));
+            cmd.add(Json.str(p.logging, "argument").replace("${path}", inst.logConfig(p).toString()));
         }
         cmd.add(p.mainClass);
         if (p.legacyGameArgs != null) {
@@ -95,12 +88,9 @@ public final class GameLauncher {
         }
         if (hasServer && !quickPlay) {
             // prima della 1.20 non c'è Quick Play: si usano --server/--port
-            String host = pack.server;
-            String port = "25565";
-            int colon = host.lastIndexOf(':');
-            if (colon > 0) { port = host.substring(colon + 1); host = host.substring(0, colon); }
-            cmd.add("--server"); cmd.add(host);
-            cmd.add("--port"); cmd.add(port);
+            Minecraft.Address a = Minecraft.parseAddress(pack.server);
+            cmd.add("--server"); cmd.add(a.host());
+            cmd.add("--port"); cmd.add(Integer.toString(a.port()));
         }
         return cmd;
     }
@@ -117,8 +107,12 @@ public final class GameLauncher {
         return false;
     }
 
+    public static Path outputLog(Path instanceDir) {
+        return instanceDir.resolve(".packlauncher").resolve("game-output.log");
+    }
+
     public static Process start(List<String> cmd, Path instanceDir) throws IOException {
-        Path out = instanceDir.resolve(".packlauncher").resolve("game-output.log");
+        Path out = outputLog(instanceDir);
         Files.createDirectories(out.getParent());
         return new ProcessBuilder(cmd)
                 .directory(instanceDir.toFile())

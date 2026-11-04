@@ -2,6 +2,7 @@ package packlauncher;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +25,13 @@ public final class JavaRuntime {
     private static final String ALL_RUNTIMES =
             "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 
+    /** Java richiesto da una versione di Minecraft: componente Mojang e versione major. */
+    public record Version(String component, int major) {
+        public Version {
+            if (component == null) component = defaultComponent(major);
+        }
+    }
+
     private final Path runtimeDir;
     private final Downloader dl;
     private final Progress progress;
@@ -39,11 +47,12 @@ public final class JavaRuntime {
      * Se il Java che sta eseguendo il launcher ha già la versione esatta richiesta lo riusa,
      * altrimenti scarica il runtime Mojang.
      */
-    public String ensure(String component, int major) throws IOException {
+    public String ensure(Version v) throws IOException {
+        String component = v.component();
+        int major = v.major();
         if (Runtime.version().feature() == major && !"32".equals(System.getProperty("sun.arch.data.model"))) {
-            return GameInstaller.javaExecutable();
+            return javaIn(Path.of(System.getProperty("java.home"), "bin")).toString();
         }
-        if (component == null) component = defaultComponent(major);
         Path home = runtimeDir.resolve(component);
         Path marker = home.resolve(".installed");
         Path exe = executable(home);
@@ -70,8 +79,7 @@ public final class JavaRuntime {
             if ("directory".equals(type)) {
                 Files.createDirectories(dest);
             } else if ("file".equals(type)) {
-                Map<String, Object> raw = Json.obj(Json.obj(e.getValue(), "downloads"), "raw");
-                tasks.add(new Downloader.Task(Json.str(raw, "url"), dest, Json.str(raw, "sha1"), Json.num(raw, "size", -1)));
+                tasks.add(Downloader.Task.of(Json.obj(Json.obj(e.getValue(), "downloads"), "raw"), dest));
                 if (Json.bool(e.getValue(), "executable", false)) executables.add(dest);
             } else if ("link".equals(type)) {
                 links.add(new String[]{e.getKey(), Json.str(e.getValue(), "target")});
@@ -83,7 +91,7 @@ public final class JavaRuntime {
             for (Path p : executables) p.toFile().setExecutable(true, false);
             for (String[] l : links) {
                 Path link = home.resolve(l[0]);
-                if (Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
+                if (Files.exists(link, LinkOption.NOFOLLOW_LINKS)) continue;
                 Files.createDirectories(link.getParent());
                 Files.createSymbolicLink(link, Path.of(l[1]));
             }
@@ -94,12 +102,14 @@ public final class JavaRuntime {
     }
 
     private static Path executable(Path home) {
-        if (OS.NAME.equals("windows")) {
-            Path javaw = home.resolve("bin").resolve("javaw.exe");
-            return Files.exists(javaw) ? javaw : home.resolve("bin").resolve("java.exe");
-        }
-        if (OS.NAME.equals("osx")) return home.resolve("jre.bundle/Contents/Home/bin/java");
-        return home.resolve("bin").resolve("java");
+        return javaIn(OS.NAME.equals("osx") ? home.resolve("jre.bundle/Contents/Home/bin") : home.resolve("bin"));
+    }
+
+    /** L'eseguibile Java in una cartella bin/ (su Windows javaw.exe, così non si apre la console). */
+    private static Path javaIn(Path bin) {
+        if (!OS.NAME.equals("windows")) return bin.resolve("java");
+        Path javaw = bin.resolve("javaw.exe");
+        return Files.exists(javaw) ? javaw : bin.resolve("java.exe");
     }
 
     static String defaultComponent(int major) {

@@ -7,19 +7,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${1:-all}"
 OUT="$(mkdir -p "${2:-$ROOT/build}" && cd "${2:-$ROOT/build}" && pwd)"
-NAME="$(grep '^launcher.name=' "$ROOT/launcher/src/main/resources/launcher.properties" | cut -d= -f2)"
+prop() { grep "^$1=" "$ROOT/launcher/src/main/resources/launcher.properties" | cut -d= -f2; }
+NAME="$(prop launcher.name)"
 JRE_API="https://api.adoptium.net/v3/binary/latest/21/ga"
 
 (cd "$ROOT" && gradle jar -q)
 
-build_windows() {
-  local work; work="$(mktemp -d)"
-  echo "Windows: scarico Temurin JRE 21 x64..."
-  curl -fsSL -o "$work/jre.zip" "$JRE_API/windows/x64/jre/hotspot/normal/eclipse?project=jdk"
+# Cartella di lavoro con <Nome>/java (Temurin JRE 21 x64) e <Nome>/launcher.jar.
+# Uso: work="$(prepare <windows|linux>)"
+prepare() {
+  local os="$1" work; work="$(mktemp -d)"
+  echo "$os: scarico Temurin JRE 21 x64..." >&2
+  curl -fsSL -o "$work/jre.archive" "$JRE_API/$os/x64/jre/hotspot/normal/eclipse?project=jdk"
   mkdir -p "$work/$NAME" "$work/jre"
-  unzip -q "$work/jre.zip" -d "$work/jre"
+  if [ "$os" = windows ]; then unzip -q "$work/jre.archive" -d "$work/jre"; else tar -xzf "$work/jre.archive" -C "$work/jre"; fi
   mv "$work"/jre/*/ "$work/$NAME/java"
   cp "$ROOT/launcher/build/libs/launcher.jar" "$work/$NAME/launcher.jar"
+  echo "$work"
+}
+
+build_windows() {
+  local work; work="$(prepare windows)"
   # "start" + javaw: la finestra del prompt si chiude subito.
   printf '@echo off\r\ncd /d "%%~dp0"\r\nstart "" "%%~dp0java\\bin\\javaw.exe" -jar "%%~dp0launcher.jar"\r\n' \
     > "$work/$NAME/Avvia $NAME.bat"
@@ -32,13 +40,7 @@ build_windows() {
 }
 
 build_linux() {
-  local work; work="$(mktemp -d)"
-  echo "Linux: scarico Temurin JRE 21 x64..."
-  curl -fsSL -o "$work/jre.tar.gz" "$JRE_API/linux/x64/jre/hotspot/normal/eclipse?project=jdk"
-  mkdir -p "$work/$NAME" "$work/jre"
-  tar -xzf "$work/jre.tar.gz" -C "$work/jre"
-  mv "$work"/jre/*/ "$work/$NAME/java"
-  cp "$ROOT/launcher/build/libs/launcher.jar" "$work/$NAME/launcher.jar"
+  local work; work="$(prepare linux)"
   cp "$ROOT/launcher/src/main/resources/icon.png" "$work/$NAME/icon.png"
 
   cat > "$work/$NAME/avvia.sh" <<'SH'
@@ -83,7 +85,7 @@ Estrai l'archivio dove vuoi (es. tar -xzf $NAME-Linux.tar.gz), poi:
   ./crea-collegamento.sh     (facoltativo) aggiunge $NAME al menu delle applicazioni
 
 Minecraft, il modpack e il Java per il gioco vengono scaricati in automatico.
-I dati stanno in ~/.$(grep '^launcher.dir=' "$ROOT/launcher/src/main/resources/launcher.properties" | cut -d= -f2)/
+I dati stanno in ~/.$(prop launcher.dir)/
 TXT
   chmod +x "$work/$NAME/avvia.sh" "$work/$NAME/crea-collegamento.sh"
   rm -f "$OUT/$NAME-Linux.tar.gz"

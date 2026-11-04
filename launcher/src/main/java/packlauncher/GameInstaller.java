@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,6 +52,7 @@ public final class GameInstaller {
     public Path librariesDir() { return root.resolve("libraries"); }
     public Path assetsDir() { return root.resolve("assets"); }
     public Path versionDir(String id) { return root.resolve("versions").resolve(id); }
+    private Path versionJson(String id) { return versionDir(id).resolve(id + ".json"); }
 
     /** Profilo risolto (versione figlia unita alla versione vanilla da cui eredita). */
     public static final class Profile {
@@ -58,8 +60,7 @@ public final class GameInstaller {
         public String vanillaId;
         public String mainClass;
         public String type;
-        public int javaMajor;
-        public String javaComponent;
+        public JavaRuntime.Version java;
         public Map<String, Object> assetIndex;
         public Map<String, Object> logging;
         public final List<Map<String, Object>> libraries = new ArrayList<>();
@@ -76,7 +77,7 @@ public final class GameInstaller {
     // ------------------------------------------------------------------ vanilla
 
     public Map<String, Object> installVanilla(String mcVersion) throws IOException {
-        Path jsonFile = versionDir(mcVersion).resolve(mcVersion + ".json");
+        Path jsonFile = versionJson(mcVersion);
         Map<String, Object> json;
         if (Files.exists(jsonFile)) {
             json = Json.parseObject(Files.readString(jsonFile));
@@ -86,26 +87,23 @@ public final class GameInstaller {
             Object entry = Json.arr(manifest, "versions").stream()
                     .filter(v -> mcVersion.equals(Json.str(v, "id"))).findFirst()
                     .orElseThrow(() -> new IOException("Versione Minecraft sconosciuta: " + mcVersion));
-            dl.downloadOne(new Downloader.Task(Json.str(entry, "url"), jsonFile, Json.str(entry, "sha1"), -1), null);
+            dl.downloadOne(Downloader.Task.of(entry, jsonFile), null);
             json = Json.parseObject(Files.readString(jsonFile));
         }
 
-        Map<String, Object> client = Json.obj(Json.obj(json, "downloads"), "client");
-        Path jar = versionDir(mcVersion).resolve(mcVersion + ".jar");
-        long size = Json.num(client, "size", -1);
-        if (!Files.exists(jar) || Files.size(jar) != size) {
+        Downloader.Task client = Downloader.Task.of(Json.obj(Json.obj(json, "downloads"), "client"),
+                versionDir(mcVersion).resolve(mcVersion + ".jar"));
+        if (!Files.exists(client.dest()) || Files.size(client.dest()) != client.size()) {
             progress.stage("Scarico Minecraft " + mcVersion);
-            dl.downloadAll(List.of(new Downloader.Task(Json.str(client, "url"), jar, Json.str(client, "sha1"), size)), progress);
+            dl.downloadAll(List.of(client), progress);
         }
         return json;
     }
 
-    /** Java richiesto da una versione vanilla: {componente, major}. */
-    public static String[] javaFor(Map<String, Object> vanillaJson) {
-        Map<String, Object> jv = Json.obj(vanillaJson, "javaVersion");
-        int major = (int) Json.num(jv, "majorVersion", 8);
-        String comp = Json.str(jv, "component");
-        return new String[]{comp != null ? comp : JavaRuntime.defaultComponent(major), Integer.toString(major)};
+    /** Java richiesto da una versione (campo javaVersion; senza, Java 8). */
+    public static JavaRuntime.Version javaFor(Map<String, Object> versionJson) {
+        Map<String, Object> jv = Json.obj(versionJson, "javaVersion");
+        return new JavaRuntime.Version(Json.str(jv, "component"), (int) Json.num(jv, "majorVersion", 8));
     }
 
     // ------------------------------------------------------------------ loader
@@ -144,7 +142,7 @@ public final class GameInstaller {
     private String installProfileJson(String url) throws IOException {
         String text = dl.getString(url);
         String id = Json.str(Json.parseObject(text), "id");
-        Path file = versionDir(id).resolve(id + ".json");
+        Path file = versionJson(id);
         if (!Files.exists(file)) {
             progress.stage("Installo " + id);
             Files.createDirectories(file.getParent());
@@ -159,7 +157,7 @@ public final class GameInstaller {
         Path markerFile = cache.resolve(name + ".installed");
         if (Files.exists(markerFile)) {
             String id = Files.readString(markerFile).trim();
-            if (Files.exists(versionDir(id).resolve(id + ".json"))) return id;
+            if (Files.exists(versionJson(id))) return id;
         }
 
         progress.stage("Installo " + name + " (può richiedere qualche minuto)");
@@ -184,10 +182,9 @@ public final class GameInstaller {
             }
         } catch (InterruptedException e) {
             p.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw Downloader.interrupted(e);
         }
-        if (p.exitValue() != 0 || !Files.exists(versionDir(id).resolve(id + ".json"))) {
+        if (p.exitValue() != 0 || !Files.exists(versionJson(id))) {
             throw new IOException("Installazione di " + name + " fallita (codice " + p.exitValue() + "). Log: " + log);
         }
         Files.writeString(markerFile, id);
@@ -213,7 +210,7 @@ public final class GameInstaller {
 
     /** Carica la versione (eventualmente figlia via inheritsFrom) e la unisce al genitore. */
     public Profile resolve(String versionId) throws IOException {
-        Map<String, Object> child = Json.parseObject(Files.readString(versionDir(versionId).resolve(versionId + ".json"), StandardCharsets.UTF_8));
+        Map<String, Object> child = Json.parseObject(Files.readString(versionJson(versionId), StandardCharsets.UTF_8));
         String parentId = Json.str(child, "inheritsFrom");
         Map<String, Object> parent = parentId != null ? installVanilla(parentId) : null;
         Map<String, Object> base = parent != null ? parent : child;
@@ -221,13 +218,11 @@ public final class GameInstaller {
         Profile p = new Profile();
         p.id = versionId;
         p.vanillaId = parentId != null ? parentId : versionId;
-        p.mainClass = Json.str(child, "mainClass") != null ? Json.str(child, "mainClass") : Json.str(base, "mainClass");
-        p.type = Json.str(child, "type") != null ? Json.str(child, "type") : Json.str(base, "type");
+        p.mainClass = inherited(child, base, "mainClass");
+        p.type = inherited(child, base, "type");
         p.assetIndex = Json.obj(base, "assetIndex");
         p.logging = Json.obj(Json.obj(base, "logging"), "client");
-        String[] java = javaFor(Json.obj(child, "javaVersion") != null ? child : base);
-        p.javaComponent = java[0];
-        p.javaMajor = Integer.parseInt(java[1]);
+        p.java = javaFor(Json.obj(child, "javaVersion") != null ? child : base);
 
         // Librerie: prima quelle della versione figlia, poi quelle vanilla non duplicate.
         Map<String, Map<String, Object>> libs = new LinkedHashMap<>();
@@ -256,6 +251,11 @@ public final class GameInstaller {
             Files.copy(vanillaJar, p.clientJar, StandardCopyOption.REPLACE_EXISTING);
         }
         return p;
+    }
+
+    private static String inherited(Map<String, Object> child, Map<String, Object> base, String key) {
+        String v = Json.str(child, key);
+        return v != null ? v : Json.str(base, key);
     }
 
     @SuppressWarnings("unchecked")
@@ -334,10 +334,7 @@ public final class GameInstaller {
                 }
             }
             Map<String, Object> nat = nativeArtifact(lib);
-            if (nat != null) {
-                tasks.add(new Downloader.Task(Json.str(nat, "url"), librariesDir().resolve(Json.str(nat, "path")),
-                        Json.str(nat, "sha1"), Json.num(nat, "size", -1)));
-            }
+            if (nat != null) tasks.add(Downloader.Task.of(nat, librariesDir().resolve(Json.str(nat, "path"))));
         }
         dl.downloadAll(tasks, progress);
     }
@@ -352,7 +349,7 @@ public final class GameInstaller {
             for (Object x : Json.arr(Json.obj(lib, "extract"), "exclude")) exclude.add(x.toString());
             Path jar = librariesDir().resolve(Json.str(nat, "path"));
             try (ZipFile zip = new ZipFile(jar.toFile())) {
-                for (ZipEntry e : java.util.Collections.list(zip.entries())) {
+                for (ZipEntry e : Collections.list(zip.entries())) {
                     if (e.isDirectory() || e.getName().startsWith("META-INF/")
                             || exclude.stream().anyMatch(e.getName()::startsWith)) continue;
                     Path out = nativesDir.resolve(e.getName()).normalize();
@@ -371,8 +368,7 @@ public final class GameInstaller {
         progress.stage("Controllo risorse di gioco");
         String indexId = Json.str(p.assetIndex, "id");
         Path indexFile = assetsDir().resolve("indexes").resolve(indexId + ".json");
-        dl.downloadAll(List.of(new Downloader.Task(Json.str(p.assetIndex, "url"), indexFile,
-                Json.str(p.assetIndex, "sha1"), Json.num(p.assetIndex, "size", -1))), progress);
+        dl.downloadAll(List.of(Downloader.Task.of(p.assetIndex, indexFile)), progress);
 
         Map<String, Object> index = Json.parseObject(Files.readString(indexFile));
         Map<String, Object> objects = Json.obj(index, "objects");
@@ -408,23 +404,16 @@ public final class GameInstaller {
 
         if (p.logging != null) {
             Map<String, Object> f = Json.obj(p.logging, "file");
-            dl.downloadAll(List.of(new Downloader.Task(Json.str(f, "url"),
-                    assetsDir().resolve("log_configs").resolve(Json.str(f, "id")),
-                    Json.str(f, "sha1"), Json.num(f, "size", -1))), progress);
+            dl.downloadAll(List.of(Downloader.Task.of(f, logConfig(p))), progress);
         }
+    }
+
+    /** File di configurazione del log (log4j) indicato dal JSON della versione. */
+    public Path logConfig(Profile p) {
+        return assetsDir().resolve("log_configs").resolve(Json.str(Json.obj(p.logging, "file"), "id"));
     }
 
     private Path objectPath(String hash) {
         return assetsDir().resolve("objects").resolve(hash.substring(0, 2)).resolve(hash);
-    }
-
-    /** Java che sta eseguendo il launcher. */
-    public static String javaExecutable() {
-        Path bin = Path.of(System.getProperty("java.home"), "bin");
-        if (OS.NAME.equals("windows")) {
-            Path javaw = bin.resolve("javaw.exe");
-            return (Files.exists(javaw) ? javaw : bin.resolve("java.exe")).toString();
-        }
-        return bin.resolve("java").toString();
     }
 }
