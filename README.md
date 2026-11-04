@@ -193,7 +193,11 @@ whitelist (`/whitelist add NomeAmico`) e una mod di login con password per NeoFo
 
 #### Rilevamento premium / offline
 
-Con `authMode=auto` (il default) il pack-builder, a ogni pubblicazione, si collega al server
+Il **launcher** controlla il server Minecraft ogni volta che si apre o si sceglie un server (e di nuovo
+prima di avviare il gioco): se cambi `online-mode` se ne accorge da solo, senza ripubblicare il pack.
+Se il server è spento o non risponde entro 3 secondi usa l'`authMode` del manifest.
+
+Anche il pack-builder, con `authMode=auto` (il default), a ogni pubblicazione si collega al server
 Minecraft indicato in `server` e fa un login di prova con il nome `LollataProbe`:
 
 - se il server chiede la cifratura (Encryption Request) è in `online-mode=true` → `premium`;
@@ -203,7 +207,7 @@ Il nome di prova non entra mai davvero nel mondo. Sui server Forge viene aggiunt
 letto dallo status del server. Se il server è spento o la risposta non è chiara, il campo resta
 vuoto (il launcher lo tratta come `offline`) e il builder stampa un avviso: avvia il server e
 ripubblica, oppure scrivi `authMode=premium` o `authMode=offline` in `pack.properties`.
-Se cambi `online-mode` sul server, ripubblica il pack per aggiornare l'indice.
+Il valore del manifest serve solo come riserva quando il server non risponde al launcher.
 
 Per controllare un server al volo:
 

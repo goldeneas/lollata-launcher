@@ -51,8 +51,9 @@ public final class ServerProbe {
     /**
      * @param authMode {@link #PREMIUM}, {@link #OFFLINE} o null se non è stato possibile capirlo
      * @param detail   spiegazione leggibile (cosa ha risposto il server)
+     * @param online   false se il server non risponde nemmeno allo status ping (spento o irraggiungibile)
      */
-    public record Result(String authMode, String detail, int protocol, String version) {}
+    public record Result(String authMode, String detail, int protocol, String version, boolean online) {}
 
     /** "host" o "host:porta" (porta 25565 di default). */
     public Result probe(String server) {
@@ -77,9 +78,9 @@ public final class ServerProbe {
             version = Json.str(v, "name");
             marker = forgeMarker(status);
         } catch (IOException | RuntimeException e) {
-            return new Result(null, "server non raggiungibile (" + host + ":" + port + "): " + e.getMessage(), -1, null);
+            return new Result(null, "server non raggiungibile (" + host + ":" + port + "): " + e.getMessage(), -1, null, false);
         }
-        if (protocol < 0) return new Result(null, "il server non ha indicato la versione del protocollo", protocol, version);
+        if (protocol < 0) return new Result(null, "il server non ha indicato la versione del protocollo", protocol, version, true);
 
         List<String> markers = new ArrayList<>();
         markers.add(marker);
@@ -88,13 +89,13 @@ public final class ServerProbe {
         for (String m : markers) {
             try {
                 Answer a = login(host, port, protocol, m);
-                if (a.authMode != null) return new Result(a.authMode, a.detail, protocol, version);
+                if (a.authMode != null) return new Result(a.authMode, a.detail, protocol, version, true);
                 last = a.detail;
             } catch (IOException e) {
                 last = "errore durante il login di prova: " + e.getMessage();
             }
         }
-        return new Result(null, last, protocol, version);
+        return new Result(null, last, protocol, version, true);
     }
 
     // ---------------------------------------------------------------- status

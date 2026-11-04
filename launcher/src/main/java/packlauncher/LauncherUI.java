@@ -32,6 +32,8 @@ import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
+import packlauncher.common.ServerProbe;
+
 /**
  * Finestra unica: server/modpack, account (Microsoft premium o nickname), RAM, pulsante Gioca.
  * Nickname, RAM e tipo di account scelto sono salvati per server; l'account Microsoft vale per tutti.
@@ -112,6 +114,7 @@ public final class LauncherUI {
         });
         accessHint.setFont(accessHint.getFont().deriveFont(Font.PLAIN, 11f));
         refreshAccounts();
+        new javax.swing.Timer(RECHECK_S * 1000, e -> recheckServer()).start();
         packBox.addActionListener(e -> loadSelectedPack());
         packInfo.setFont(packInfo.getFont().deriveFont(Font.PLAIN, 11f));
 
@@ -152,6 +155,7 @@ public final class LauncherUI {
         Pack.Entry entry = packs.get(idx);
         if (currentPack != null && currentPack.id.equals(entry.id())) return;
         currentPack = null;
+        serverOnline = true;
         playButton.setEnabled(false);
         packInfo.setText(infoText(entry.summary(), entry.server(), entry.authMode()));
         // Nome e RAM salvati per questo server (o quelli globali delle versioni precedenti)
@@ -160,9 +164,14 @@ public final class LauncherUI {
         status.setText("Carico " + entry.name() + "...");
         background(() -> {
             Pack p = Pack.load(dl, entry.url());
+            // online-mode letto ora dal server: vale anche se è cambiato dopo l'ultima pubblicazione
+            ServerProbe.Result probe = LaunchFlow.refreshAuthMode(p, new ServerProbe(LaunchFlow.PROBE_TIMEOUT_MS));
+            String probeLog = LaunchFlow.describeProbe(p, probe);
             SwingUtilities.invokeLater(() -> {
                 if (packBox.getSelectedIndex() != idx) return; // nel frattempo è stato scelto un altro server
                 currentPack = p;
+                serverOnline = LaunchFlow.serverOnline(probe);
+                logArea.append(probeLog + "\n");
                 SpinnerNumberModel m = (SpinnerNumberModel) ramSpinner.getModel();
                 int want = Math.max(2, (p.memoryMb + 1023) / 1024);
                 try { want = Integer.parseInt(cfg.getFor(p.id, "memoryGb", Integer.toString(want))); }
@@ -173,7 +182,7 @@ public final class LauncherUI {
                                 ? " - " + p.loaderType + " " + p.loaderVersion : ""),
                         p.server, p.authMode));
                 status.setText(p.name + " v" + p.version + " - pronto");
-                updateAccess();
+                selectAccountFor(p.id, p.authMode);   // chiama anche updateAccess()
             });
         });
     }
@@ -253,6 +262,36 @@ public final class LauncherUI {
     private boolean refreshingAccounts;
     private boolean busyNow;
 
+    // ------------------------------------------------------ server acceso?
+
+    static final int RECHECK_S = 10;
+    /** false se l'ultima sonda non ha raggiunto il server Minecraft: "Gioca" resta disattivato. */
+    private boolean serverOnline = true;
+    private boolean rechecking;
+
+    /** Ogni RECHECK_S secondi, se il server era spento, riprova: appena si accende "Gioca" si riattiva. */
+    private void recheckServer() {
+        Pack p = currentPack;
+        if (p == null || serverOnline || busyNow || rechecking) return;
+        rechecking = true;
+        Thread t = new Thread(() -> {
+            ServerProbe.Result r = LaunchFlow.refreshAuthMode(p, new ServerProbe(LaunchFlow.PROBE_TIMEOUT_MS));
+            SwingUtilities.invokeLater(() -> {
+                rechecking = false;
+                if (currentPack != p || !LaunchFlow.serverOnline(r)) return;
+                serverOnline = true;
+                logArea.append(LaunchFlow.describeProbe(p, r) + "\n");
+                packInfo.setText(infoText(
+                        "Minecraft " + p.minecraft + (p.loaderType != null && !p.loaderType.equals("vanilla")
+                                ? " - " + p.loaderType + " " + p.loaderVersion : ""),
+                        p.server, p.authMode));
+                selectAccountFor(p.id, p.authMode);
+            });
+        }, "server-recheck");
+        t.setDaemon(true);
+        t.start();
+    }
+
     private boolean premiumSelected() {
         return accounts.current() != null && accountBox.getSelectedIndex() == 1;
     }
@@ -298,8 +337,11 @@ public final class LauncherUI {
         boolean premium = premiumSelected();
         String authMode = currentPack != null ? currentPack.authMode
                 : selectedEntry() != null ? selectedEntry().authMode() : null;
-        boolean ok = AccessPolicy.canJoin(authMode, premium);
-        if (ok) {
+        boolean ok = AccessPolicy.canJoin(authMode, premium) && serverOnline;
+        if (!serverOnline) {
+            accessHint.setText("<html><b>Il server Minecraft è spento o non raggiungibile.</b> "
+                    + "Riprovo da solo ogni " + RECHECK_S + " secondi.</html>");
+        } else if (ok) {
             accessHint.setText(" ");
         } else if (accounts.premiumAvailable()) {
             accessHint.setText("<html><b>Questo server richiede un account premium:</b> premi \"Accedi con Microsoft\".</html>");
