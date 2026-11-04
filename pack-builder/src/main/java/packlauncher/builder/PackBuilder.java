@@ -27,6 +27,10 @@ import packlauncher.common.Json;
  *
  * Uso:
  *   java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]
+ *   java -jar pack-builder.jar --all <cartella-con-le-istanze> <cartella-www> [--prune]
+ *
+ * Con --all ogni sottocartella che è un'istanza Prism diventa un server/modpack:
+ * &lt;www&gt;/&lt;id&gt;/pack.json + objects/, e &lt;www&gt;/index.json elenca esattamente quelle istanze.
  *
  * Versione di Minecraft e loader vengono lette da mmc-pack.json, il nome da instance.cfg.
  * Vengono pubblicati i file di .minecraft/. Le opzioni del pack stanno in
@@ -45,29 +49,112 @@ public final class PackBuilder {
     private static final List<String> DEFAULT_ONCE = List.of(
             "options.txt", "optionsof.txt", "optionsshaders.txt", "servers.dat");
 
+    private static final java.util.regex.Pattern VALID_ID = java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
+    private static final String USAGE = """
+            Uso:
+              java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]
+              java -jar pack-builder.jar --all <cartella-con-le-istanze> <cartella-www> [--prune]""";
+
     public static void main(String[] args) throws IOException {
-        if (args.length < 2) {
-            System.err.println("Uso: java -jar pack-builder.jar <cartella-istanza-prism> <cartella-output> [--index <index.json>] [--prune]");
-            System.exit(1);
-        }
-        Path src = Path.of(args[0]).toAbsolutePath().normalize();
-        Path out = Path.of(args[1]).toAbsolutePath().normalize();
+        List<String> pos = new ArrayList<>();
         String indexArg = null;
-        boolean prune = false;
-        for (int i = 2; i < args.length; i++) {
+        boolean prune = false, all = false;
+        for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--index") && i + 1 < args.length) indexArg = args[++i];
             else if (args[i].equals("--prune")) prune = true;
+            else if (args[i].equals("--all")) all = true;
+            else pos.add(args[i]);
         }
+        if (pos.size() != 2) {
+            System.err.println(USAGE);
+            System.exit(1);
+        }
+        Path src = Path.of(pos.get(0)).toAbsolutePath().normalize();
+        Path out = Path.of(pos.get(1)).toAbsolutePath().normalize();
         Path index = indexArg != null ? Path.of(indexArg).toAbsolutePath().normalize() : null;
         try {
-            new PackBuilder().build(src, out, index, prune);
+            if (all) new PackBuilder().buildAll(src, out, prune);
+            else new PackBuilder().build(src, out, index, prune);
         } catch (IOException | IllegalArgumentException e) {
             System.err.println("Errore: " + e.getMessage());
             System.exit(1);
         }
     }
 
-    public void build(Path instance, Path out, Path index, boolean prune) throws IOException {
+    /**
+     * Pubblica tutte le istanze Prism in root (una per sottocartella) in www/&lt;id&gt;/ e riscrive
+     * www/index.json con esattamente quei server. Le cartelle senza mmc-pack.json vengono ignorate.
+     * Restituisce gli id pubblicati.
+     */
+    public List<String> buildAll(Path root, Path www, boolean prune) throws IOException {
+        if (!Files.isDirectory(root)) throw new IOException("Cartella non trovata: " + root);
+        List<Path> instances;
+        try (Stream<Path> s = Files.list(root)) {
+            instances = s.filter(d -> Files.isRegularFile(d.resolve("mmc-pack.json"))).sorted().toList();
+        }
+        if (instances.isEmpty()) throw new IOException("Nessuna istanza Prism (con mmc-pack.json) in " + root);
+        List<Map<String, Object>> built = new ArrayList<>();
+        Set<String> ids = new HashSet<>();
+        for (Path inst : instances) {
+            String id = readId(inst);
+            if (!ids.add(id)) throw new IllegalArgumentException("Id duplicato '" + id + "' (" + inst + ")");
+        }
+        for (Path inst : instances) {
+            String id = readId(inst);
+            System.out.println("== " + inst.getFileName() + " -> " + id);
+            built.add(build(inst, www.resolve(id), null, prune));
+        }
+        Path index = www.resolve("index.json");
+        Set<String> previous = new HashSet<>();
+        if (Files.exists(index)) {
+            for (Object p : Json.arr(Json.parseObject(Files.readString(index)), "packs")) previous.add(Json.str(p, "id"));
+        }
+        previous.removeAll(ids);
+        for (String gone : previous) {
+            System.out.println("Tolto dall'indice (istanza non più presente): " + gone + "  (i file in " + www.resolve(gone) + " restano)");
+        }
+        Map<String, Object> idx = new LinkedHashMap<>();
+        idx.put("formatVersion", 2);
+        List<Object> packs = new ArrayList<>();
+        for (Map<String, Object> pack : built) packs.add(indexEntry(index, www.resolve(Json.str(pack, "id")).resolve("pack.json"), pack));
+        idx.put("packs", packs);
+        writeAtomic(index, Json.write(idx));
+        System.out.println("Aggiornato " + index + " (" + packs.size() + " server)");
+        return built.stream().map(p -> Json.str(p, "id")).toList();
+    }
+
+    /** Id del pack: "id" in pack.properties, altrimenti il nome della cartella. */
+    static String readId(Path instance) throws IOException {
+        Properties props = loadProps(instance.resolve("pack.properties"));
+        String id = blankToNull(props.getProperty("id"));
+        if (id == null) id = instance.getFileName().toString().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]+", "-");
+        if (!VALID_ID.matcher(id).matches()) {
+            throw new IllegalArgumentException("Id non valido '" + id + "': usa lettere, numeri, '_', '-' o '.'");
+        }
+        return id;
+    }
+
+    private static Properties loadProps(Path file) throws IOException {
+        Properties props = new Properties();
+        if (Files.exists(file)) {
+            try (Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { props.load(r); }
+        }
+        return props;
+    }
+
+    /**
+     * Stub: il thread "accesso premium" lo sostituisce con la sonda del server Minecraft.
+     * Deve restituire "premium", "offline" oppure null se non si riesce a capirlo.
+     */
+    static String detectAuthMode(String server) {
+        return null;
+    }
+
+    /**
+     * Genera &lt;out&gt;/pack.json + objects/ e (se index != null) aggiorna la voce in index.json.
+     * Restituisce il manifest scritto.
+     */
+    public Map<String, Object> build(Path instance, Path out, Path index, boolean prune) throws IOException {
         if (!Files.isDirectory(instance)) throw new IOException("Cartella non trovata: " + instance);
         Path mmcPack = instance.resolve("mmc-pack.json");
         if (!Files.exists(mmcPack)) {
@@ -79,11 +166,7 @@ public final class PackBuilder {
         if (!Files.isDirectory(src)) src = instance.resolve("minecraft");
         if (!Files.isDirectory(src)) throw new IOException("Manca la cartella .minecraft/ in " + instance);
 
-        Properties props = new Properties();
-        Path propsFile = instance.resolve("pack.properties");
-        if (Files.exists(propsFile)) {
-            try (Reader r = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) { props.load(r); }
-        }
+        Properties props = loadProps(instance.resolve("pack.properties"));
 
         // Versione di Minecraft e loader da mmc-pack.json
         String detectedMc = null, detectedLoader = null, detectedLoaderType = null;
@@ -109,7 +192,7 @@ public final class PackBuilder {
             detectedVersion = blankToNull(ic.getProperty("ManagedPackVersionName"));
         }
 
-        String id = require(props.getProperty("id"), "id");
+        String id = readId(instance);
         String name = props.getProperty("name", detectedName != null ? detectedName : id);
         String mc = require(props.getProperty("minecraft", detectedMc), "minecraft");
         String loaderType = props.getProperty("loader", detectedLoaderType != null ? detectedLoaderType : "vanilla");
@@ -120,6 +203,8 @@ public final class PackBuilder {
         if (!loaderType.equals("vanilla")) require(loaderVersion, "loaderVersion");
         String version = props.getProperty("version", detectedVersion != null
                 ? detectedVersion + "-" + stamp() : stamp());
+        String server = blankToNull(props.getProperty("server"));
+        String authMode = resolveAuthMode(props.getProperty("authMode"), server);
 
         List<PathMatcher> exclude = matchers(DEFAULT_EXCLUDE, props.getProperty("exclude", ""));
         List<PathMatcher> once = matchers(DEFAULT_ONCE, props.getProperty("once", ""));
@@ -169,7 +254,8 @@ public final class PackBuilder {
         loader.put("type", loaderType);
         if (loaderVersion != null) loader.put("version", loaderVersion);
         pack.put("loader", loader);
-        if (props.getProperty("server") != null) pack.put("server", props.getProperty("server"));
+        if (server != null) pack.put("server", server);
+        if (authMode != null) pack.put("authMode", authMode);
         pack.put("memoryMb", Long.parseLong(props.getProperty("memoryMb", "8192")));
         List<Object> jvm = new ArrayList<>();
         for (String a : props.getProperty("jvmArgs", "").trim().split("\\s+")) if (!a.isEmpty()) jvm.add(a);
@@ -178,16 +264,37 @@ public final class PackBuilder {
 
         // pack.json per ultimo e in modo atomico: i client vedono o la vecchia o la nuova versione.
         Path packJson = out.resolve("pack.json");
-        Path tmp = out.resolve("pack.json.tmp");
-        Files.writeString(tmp, Json.write(pack));
-        Files.move(tmp, packJson, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        writeAtomic(packJson, Json.write(pack));
 
         System.out.printf("Pack %s v%s: %d file, %d MB, %d oggetti nuovi%n",
                 id, version, entries.size(), totalSize / 1024 / 1024, copied);
         System.out.printf("Minecraft %s, %s %s%n", mc, loaderType, loaderVersion == null ? "" : loaderVersion);
+        System.out.println("Accesso: " + (authMode == null ? "non indicato" : authMode));
 
         if (prune) prune(objects, used);
-        if (index != null) updateIndex(index, out.resolve("pack.json"), id, name);
+        if (index != null) updateIndex(index, packJson, pack);
+        return pack;
+    }
+
+    /** authMode da pack.properties: premium | offline | auto (default: chiede al server Minecraft). */
+    static String resolveAuthMode(String configured, String server) {
+        String v = configured == null || configured.isBlank() ? "auto" : configured.trim().toLowerCase(java.util.Locale.ROOT);
+        switch (v) {
+            case "premium": case "offline": return v;
+            case "auto":
+                if (server == null) return null;
+                String detected = detectAuthMode(server);
+                return "premium".equals(detected) || "offline".equals(detected) ? detected : null;
+            default:
+                throw new IllegalArgumentException("authMode non valido: " + configured + " (premium | offline | auto)");
+        }
+    }
+
+    private static void writeAtomic(Path file, String content) throws IOException {
+        Files.createDirectories(file.toAbsolutePath().getParent());
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(tmp, content);
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
     private static void prune(Path objects, Set<String> used) throws IOException {
@@ -201,18 +308,33 @@ public final class PackBuilder {
     }
 
     @SuppressWarnings("unchecked")
-    private static void updateIndex(Path index, Path packJson, String id, String name) throws IOException {
+    static void updateIndex(Path index, Path packJson, Map<String, Object> pack) throws IOException {
         Map<String, Object> idx = Files.exists(index)
                 ? Json.parseObject(Files.readString(index)) : new LinkedHashMap<>();
+        idx.put("formatVersion", 2);
         List<Object> packs = (List<Object>) idx.computeIfAbsent("packs", k -> new ArrayList<>());
-        packs.removeIf(p -> id.equals(Json.str(p, "id")));
-        Map<String, Object> e = new LinkedHashMap<>();
-        e.put("id", id);
-        e.put("name", name);
-        e.put("url", index.getParent().relativize(packJson).toString().replace('\\', '/'));
-        packs.add(e);
-        Files.writeString(index, Json.write(idx));
+        String id = Json.str(pack, "id");
+        Map<String, Object> e = indexEntry(index, packJson, pack);
+        boolean replaced = false;
+        for (int i = 0; i < packs.size(); i++) {
+            if (id.equals(Json.str(packs.get(i), "id"))) { packs.set(i, e); replaced = true; break; }
+        }
+        if (!replaced) packs.add(e);
+        idx.put("packs", packs);
+        writeAtomic(index, Json.write(idx));
         System.out.println("Aggiornato " + index);
+    }
+
+    /** Voce di index.json: i dati principali del pack, così il launcher non deve scaricare ogni pack.json. */
+    static Map<String, Object> indexEntry(Path index, Path packJson, Map<String, Object> pack) {
+        Map<String, Object> e = new LinkedHashMap<>();
+        e.put("id", pack.get("id"));
+        e.put("name", pack.get("name"));
+        e.put("url", index.toAbsolutePath().getParent().relativize(packJson.toAbsolutePath()).toString().replace('\\', '/'));
+        for (String k : List.of("version", "minecraft", "loader", "server", "authMode")) {
+            if (pack.get(k) != null) e.put(k, pack.get(k));
+        }
+        return e;
     }
 
     private static List<PathMatcher> matchers(List<String> defaults, String extra) {
