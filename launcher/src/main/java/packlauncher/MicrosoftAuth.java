@@ -253,8 +253,7 @@ public final class MicrosoftAuth {
         try {
             res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw Downloader.interrupted(e);
         }
         int code = res.statusCode();
         String text = res.body() == null ? "" : res.body().trim();

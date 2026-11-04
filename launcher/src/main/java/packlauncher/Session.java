@@ -1,5 +1,7 @@
 package packlauncher;
 
+import packlauncher.common.Minecraft;
+
 /**
  * Identità con cui avviare il gioco.
  *
@@ -13,7 +15,7 @@ public record Session(String name, String uuid, String accessToken, boolean prem
 
     public static Session offline(String name) {
         if (name == null) name = "";
-        return new Session(name, GameLauncher.offlineUuid(name).toString().replace("-", ""), "0", false, "0", "0");
+        return new Session(name, Minecraft.offlineUuid(name).toString().replace("-", ""), "0", false, "0", "0");
     }
 
     /** Valore di ${user_type} negli argomenti del gioco. */

@@ -32,6 +32,7 @@ import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
+import packlauncher.common.Minecraft;
 import packlauncher.common.ServerProbe;
 
 /**
@@ -59,10 +60,18 @@ public final class LauncherUI {
     private final JTextArea logArea = new JTextArea(8, 40);
     private List<Pack.Entry> packs = List.of();
     private Pack currentPack;
+    /** true mentre si ricostruisce la tendina degli account (i suoi eventi vanno ignorati). */
+    private boolean refreshingAccounts;
+    private boolean busyNow;
+
+    static final int RECHECK_S = 10;
+    /** false se l'ultima sonda non ha raggiunto il server Minecraft: "Gioca" resta disattivato. */
+    private boolean serverOnline = true;
+    private boolean rechecking;
 
     public LauncherUI(Config cfg) {
         this.cfg = cfg;
-        this.dl = new Downloader(cfg.launcherName + "/1.0");
+        this.dl = new Downloader(cfg.userAgent());
         this.accounts = AccountManager.create(cfg);
         try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) {}
 
@@ -165,24 +174,18 @@ public final class LauncherUI {
         background(() -> {
             Pack p = Pack.load(dl, entry.url());
             // online-mode letto ora dal server: vale anche se è cambiato dopo l'ultima pubblicazione
-            ServerProbe.Result probe = LaunchFlow.refreshAuthMode(p, new ServerProbe(LaunchFlow.PROBE_TIMEOUT_MS));
-            String probeLog = LaunchFlow.describeProbe(p, probe);
+            ServerProbe.Result probe = LaunchFlow.refreshAuthMode(p);
             SwingUtilities.invokeLater(() -> {
                 if (packBox.getSelectedIndex() != idx) return; // nel frattempo è stato scelto un altro server
                 currentPack = p;
                 serverOnline = LaunchFlow.serverOnline(probe);
-                logArea.append(probeLog + "\n");
                 SpinnerNumberModel m = (SpinnerNumberModel) ramSpinner.getModel();
                 int want = Math.max(2, (p.memoryMb + 1023) / 1024);
                 try { want = Integer.parseInt(cfg.getFor(p.id, "memoryGb", Integer.toString(want))); }
                 catch (NumberFormatException ignored) {}
                 ramSpinner.setValue(Math.max(2, Math.min(want, (Integer) m.getMaximum())));
-                packInfo.setText(infoText(
-                        "Minecraft " + p.minecraft + (p.loaderType != null && !p.loaderType.equals("vanilla")
-                                ? " - " + p.loaderType + " " + p.loaderVersion : ""),
-                        p.server, p.authMode));
                 status.setText(p.name + " v" + p.version + " - pronto");
-                selectAccountFor(p.id, p.authMode);   // chiama anche updateAccess()
+                showProbe(p, probe);
             });
         });
     }
@@ -204,7 +207,7 @@ public final class LauncherUI {
         int gb = (Integer) ramSpinner.getValue();
         cfg.set("pack", currentPack.id);
         if (!premium) cfg.setFor(currentPack.id, "name", name);
-        cfg.setFor(currentPack.id, "account", premium ? "premium" : "offline");
+        cfg.setFor(currentPack.id, "account", premium ? Minecraft.PREMIUM : Minecraft.OFFLINE);
         cfg.setFor(currentPack.id, "memoryGb", Integer.toString(gb));
         try { cfg.save(); } catch (Exception ignored) {}
 
@@ -232,7 +235,7 @@ public final class LauncherUI {
             });
             int code = proc.waitFor();
             if (code == 0) System.exit(0);
-            Path log = prep.instanceDir().resolve(".packlauncher").resolve("game-output.log");
+            Path log = prep.gameLog();
             SwingUtilities.invokeLater(() -> {
                 frame.setState(JFrame.NORMAL);
                 setBusy(false);
@@ -257,40 +260,32 @@ public final class LauncherUI {
         if (!busy) { bar.setIndeterminate(false); bar.setValue(0); updateAccess(); }
     }
 
-    // ------------------------------------------------------------ account
-
-    private boolean refreshingAccounts;
-    private boolean busyNow;
-
     // ------------------------------------------------------ server acceso?
-
-    static final int RECHECK_S = 10;
-    /** false se l'ultima sonda non ha raggiunto il server Minecraft: "Gioca" resta disattivato. */
-    private boolean serverOnline = true;
-    private boolean rechecking;
 
     /** Ogni RECHECK_S secondi, se il server era spento, riprova: appena si accende "Gioca" si riattiva. */
     private void recheckServer() {
         Pack p = currentPack;
         if (p == null || serverOnline || busyNow || rechecking) return;
         rechecking = true;
-        Thread t = new Thread(() -> {
-            ServerProbe.Result r = LaunchFlow.refreshAuthMode(p, new ServerProbe(LaunchFlow.PROBE_TIMEOUT_MS));
+        daemon("server-recheck", () -> {
+            ServerProbe.Result r = LaunchFlow.refreshAuthMode(p);
             SwingUtilities.invokeLater(() -> {
                 rechecking = false;
                 if (currentPack != p || !LaunchFlow.serverOnline(r)) return;
                 serverOnline = true;
-                logArea.append(LaunchFlow.describeProbe(p, r) + "\n");
-                packInfo.setText(infoText(
-                        "Minecraft " + p.minecraft + (p.loaderType != null && !p.loaderType.equals("vanilla")
-                                ? " - " + p.loaderType + " " + p.loaderVersion : ""),
-                        p.server, p.authMode));
-                selectAccountFor(p.id, p.authMode);
+                showProbe(p, r);
             });
-        }, "server-recheck");
-        t.setDaemon(true);
-        t.start();
+        });
     }
+
+    /** Mostra cosa ha risposto il server e aggiorna dati del pack, account e "Gioca". */
+    private void showProbe(Pack p, ServerProbe.Result r) {
+        logArea.append(LaunchFlow.describeProbe(p, r) + "\n");
+        packInfo.setText(infoText(p.summary(), p.server, p.authMode));
+        selectAccountFor(p.id, p.authMode);   // chiama anche updateAccess()
+    }
+
+    // ------------------------------------------------------------ account
 
     private boolean premiumSelected() {
         return accounts.current() != null && accountBox.getSelectedIndex() == 1;
@@ -310,14 +305,14 @@ public final class LauncherUI {
             accountButton.setToolTipText("Login Microsoft non configurato in questa versione del launcher");
         }
         Pack.Entry e = selectedEntry();
-        selectAccountFor(e != null ? e.id() : null, currentPack != null ? currentPack.authMode : e != null ? e.authMode() : null);
+        selectAccountFor(e != null ? e.id() : null, currentAuthMode());
     }
 
     /** Sceglie l'account salvato per questo server; se il server è premium e c'è l'account Microsoft, quello. */
     private void selectAccountFor(String serverId, String authMode) {
         boolean hasPremium = accounts.current() != null;
         String saved = serverId != null ? cfg.getFor(serverId, "account", null) : null;
-        boolean premium = hasPremium && (Pack.AUTH_PREMIUM.equals(authMode) || !"offline".equals(saved));
+        boolean premium = hasPremium && (Minecraft.PREMIUM.equals(authMode) || !Minecraft.OFFLINE.equals(saved));
         refreshingAccounts = true;
         accountBox.setSelectedIndex(premium ? 1 : 0);
         refreshingAccounts = false;
@@ -335,8 +330,7 @@ public final class LauncherUI {
     private void updateAccess() {
         if (busyNow) return;
         boolean premium = premiumSelected();
-        String authMode = currentPack != null ? currentPack.authMode
-                : selectedEntry() != null ? selectedEntry().authMode() : null;
+        String authMode = currentAuthMode();
         boolean ok = AccessPolicy.canJoin(authMode, premium) && serverOnline;
         if (!serverOnline) {
             accessHint.setText("<html><b>Il server Minecraft è spento o non raggiungibile.</b> "
@@ -350,6 +344,13 @@ public final class LauncherUI {
                     + "ma questa versione del launcher non ha il login Microsoft configurato.</html>");
         }
         playButton.setEnabled(currentPack != null && ok);
+    }
+
+    /** authMode del pack caricato o, finché non è caricato, quello dell'indice. */
+    private String currentAuthMode() {
+        if (currentPack != null) return currentPack.authMode;
+        Pack.Entry e = selectedEntry();
+        return e != null ? e.authMode() : null;
     }
 
     private Pack.Entry selectedEntry() {
@@ -390,7 +391,7 @@ public final class LauncherUI {
         dialog.setVisible(true);
         accountButton.setEnabled(false);
 
-        Thread t = new Thread(() -> {
+        daemon("msa-login", () -> {
             try {
                 Accounts.Account acc = accounts.login(dc -> SwingUtilities.invokeLater(() -> {
                     text.setText("<html>1. Apri <b>" + dc.verificationUri() + "</b><br>"
@@ -423,17 +424,15 @@ public final class LauncherUI {
                     }
                 });
             }
-        }, "msa-login");
-        t.setDaemon(true);
-        t.start();
+        });
     }
 
     private static String infoText(String summary, String server, String authMode) {
         StringBuilder sb = new StringBuilder("<html>");
         sb.append(summary == null || summary.isEmpty() ? "&nbsp;" : summary);
         if (server != null && !server.isBlank()) sb.append("<br>Indirizzo: ").append(server);
-        if (Pack.AUTH_PREMIUM.equals(authMode)) sb.append("<br>Richiede un account Microsoft (premium)");
-        else if (Pack.AUTH_OFFLINE.equals(authMode)) sb.append("<br>Basta un nickname (non-premium)");
+        if (Minecraft.PREMIUM.equals(authMode)) sb.append("<br>Richiede un account Microsoft (premium)");
+        else if (Minecraft.OFFLINE.equals(authMode)) sb.append("<br>Basta un nickname (non-premium)");
         return sb.append("</html>").toString();
     }
 
@@ -463,8 +462,9 @@ public final class LauncherUI {
 
     private interface Job { void run() throws Exception; }
 
+    /** Esegue job fuori dal thread della UI; un errore viene mostrato all'utente. */
     private void background(Job job) {
-        Thread t = new Thread(() -> {
+        daemon("launcher-worker", () -> {
             try {
                 job.run();
             } catch (Exception e) {
@@ -475,7 +475,11 @@ public final class LauncherUI {
                     JOptionPane.showMessageDialog(frame, e.getMessage(), "Errore", JOptionPane.ERROR_MESSAGE);
                 });
             }
-        }, "launcher-worker");
+        });
+    }
+
+    private static void daemon(String name, Runnable r) {
+        Thread t = new Thread(r, name);
         t.setDaemon(true);
         t.start();
     }

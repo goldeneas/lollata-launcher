@@ -28,7 +28,7 @@ class ServerProbeTest {
         try (FakeMinecraftServer s = new FakeMinecraftServer(FakeMinecraftServer.status(PROTO_1_21_1, ""),
                 l -> FakeMinecraftServer.encryptionRequest())) {
             ServerProbe.Result r = probe(s);
-            assertEquals(ServerProbe.PREMIUM, r.authMode());
+            assertEquals(Minecraft.PREMIUM, r.authMode());
             assertEquals(PROTO_1_21_1, r.protocol());
             assertEquals("1.21.1", r.version());
             // il login usa la versione di protocollo letta dallo status
@@ -44,7 +44,7 @@ class ServerProbeTest {
     void compressionMeansOffline() throws IOException {
         try (FakeMinecraftServer s = new FakeMinecraftServer(FakeMinecraftServer.status(PROTO_1_21_1, ""),
                 l -> FakeMinecraftServer.setCompression())) {
-            assertEquals(ServerProbe.OFFLINE, probe(s).authMode());
+            assertEquals(Minecraft.OFFLINE, probe(s).authMode());
         }
     }
 
@@ -52,7 +52,7 @@ class ServerProbeTest {
     void loginSuccessMeansOffline() throws IOException {
         try (FakeMinecraftServer s = new FakeMinecraftServer(FakeMinecraftServer.status(340, ""),
                 l -> FakeMinecraftServer.loginSuccess())) {
-            assertEquals(ServerProbe.OFFLINE, probe(s).authMode());
+            assertEquals(Minecraft.OFFLINE, probe(s).authMode());
         }
     }
 
@@ -62,7 +62,7 @@ class ServerProbeTest {
         try (FakeMinecraftServer s = new FakeMinecraftServer(FakeMinecraftServer.status(PROTO_1_21_1, ""),
                 l -> FakeMinecraftServer.disconnect(kick))) {
             ServerProbe.Result r = probe(s);
-            assertEquals(ServerProbe.OFFLINE, r.authMode());
+            assertEquals(Minecraft.OFFLINE, r.authMode());
             assertTrue(r.detail().contains("whitelist"), r.detail());
         }
     }
@@ -100,7 +100,7 @@ class ServerProbeTest {
         try (FakeMinecraftServer s = new FakeMinecraftServer(status, l -> l.address().endsWith("\0FML3\0")
                 ? FakeMinecraftServer.encryptionRequest()
                 : FakeMinecraftServer.disconnect("{\"text\":\"This server has mods that require Forge\"}"))) {
-            assertEquals(ServerProbe.PREMIUM, probe(s).authMode());
+            assertEquals(Minecraft.PREMIUM, probe(s).authMode());
             assertEquals("127.0.0.1\0FML3\0", s.logins.get(0).address());
         }
     }
@@ -111,7 +111,7 @@ class ServerProbeTest {
         try (FakeMinecraftServer s = new FakeMinecraftServer(status, l -> l.address().contains("FML")
                 ? FakeMinecraftServer.disconnect("{\"text\":\"bad marker\"}")
                 : FakeMinecraftServer.setCompression())) {
-            assertEquals(ServerProbe.OFFLINE, probe(s).authMode());
+            assertEquals(Minecraft.OFFLINE, probe(s).authMode());
             assertEquals(2, s.logins.size());
         }
     }

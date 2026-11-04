@@ -49,14 +49,9 @@ public final class PackSync {
         for (Pack.PackFile f : pack.files) {
             Path dest = safeResolve(f.path());
             progress.progress(++checked, pack.files.size());
-            if (f.once()) {
-                if (!Files.exists(dest)) tasks.add(new Downloader.Task(pack.objectUrl(f.sha1()), dest, f.sha1(), f.size()));
-                continue;
-            }
-            wanted.add(f.path());
-            if (!upToDate(dest, f, oldState.get(f.path()))) {
-                tasks.add(new Downloader.Task(pack.objectUrl(f.sha1()), dest, f.sha1(), f.size()));
-            }
+            if (!f.once()) wanted.add(f.path());
+            boolean needed = f.once() ? !Files.exists(dest) : !upToDate(dest, f, oldState.get(f.path()));
+            if (needed) tasks.add(new Downloader.Task(pack.objectUrl(f.sha1()), dest, f.sha1(), f.size()));
         }
 
         // Rimuovi i file gestiti che non fanno più parte del pack.

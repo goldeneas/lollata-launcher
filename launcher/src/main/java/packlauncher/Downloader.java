@@ -13,18 +13,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
 
 import packlauncher.common.Hashing;
+import packlauncher.common.Json;
 
 /** Download HTTP con verifica SHA-1, retry e parallelismo. */
 public final class Downloader {
@@ -53,7 +53,17 @@ public final class Downloader {
     public Downloader(String userAgent) { this.userAgent = userAgent; }
 
     /** Un file da scaricare. sha1 e size possono essere null / -1. */
-    public record Task(String url, Path dest, String sha1, long size) {}
+    public record Task(String url, Path dest, String sha1, long size) {
+        /** Dai JSON Mojang: un oggetto con "url", "sha1" e "size". */
+        public static Task of(Object download, Path dest) {
+            return new Task(Json.str(download, "url"), dest, Json.str(download, "sha1"), Json.num(download, "size", -1));
+        }
+    }
+
+    static IOException interrupted(InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return new IOException("Interrotto", e);
+    }
 
     public String getString(String url) throws IOException {
         HttpRequest req = HttpRequest.newBuilder(URI.create(url))
@@ -65,13 +75,12 @@ public final class Downloader {
             if (res.statusCode() != 200) throw new IOException("HTTP " + res.statusCode() + " per " + url);
             return res.body();
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw interrupted(e);
         }
     }
 
     /** true se il file esiste già e corrisponde (hash, o almeno dimensione se l'hash manca). */
-    public static boolean isValid(Path dest, String sha1, long size) throws IOException {
+    private static boolean isValid(Path dest, String sha1, long size) throws IOException {
         if (!Files.isRegularFile(dest)) return false;
         if (size >= 0 && Files.size(dest) != size) return false;
         return sha1 == null || sha1.equalsIgnoreCase(Hashing.sha1(dest));
@@ -91,8 +100,7 @@ public final class Downloader {
                 if (!get(results.get(i))) todo.add(tasks.get(i));
             }
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw interrupted(e);
         } finally {
             checkers.shutdownNow();
         }
@@ -108,7 +116,7 @@ public final class Downloader {
         final long grandTotal = total;
         AtomicLong done = new AtomicLong();
         AtomicLong lastReport = new AtomicLong();
-        java.util.function.LongConsumer onBytes = n -> {
+        LongConsumer onBytes = n -> {
             long d = done.addAndGet(n);
             long now = System.nanoTime();
             long prev = lastReport.get();
@@ -139,7 +147,8 @@ public final class Downloader {
                 todo.size(), mb(bytes), secs, bytes / 1024.0 / 1024.0 / secs));
     }
 
-    public void downloadOne(Task t, java.util.function.LongConsumer onBytes) throws IOException {
+    /** Scarica un file (anche se esiste già). onBytes può essere null. */
+    public void downloadOne(Task t, LongConsumer onBytes) throws IOException {
         IOException last = null;
         for (int attempt = 1; attempt <= RETRIES; attempt++) {
             long counted = 0;
@@ -155,7 +164,7 @@ public final class Downloader {
                     throw new IOException("HTTP " + res.statusCode() + " per " + t.url());
                 }
                 // L'hash si calcola mentre il file arriva: niente seconda lettura dal disco.
-                MessageDigest md = sha1Digest();
+                MessageDigest md = Hashing.sha1Digest();
                 try (InputStream in = res.body(); OutputStream out = Files.newOutputStream(part)) {
                     byte[] buf = new byte[1 << 16];
                     int r;
@@ -169,14 +178,13 @@ public final class Downloader {
                 if (t.size() >= 0 && counted != t.size()) {
                     throw new IOException("Dimensione errata per " + t.url() + " (" + counted + " invece di " + t.size() + ")");
                 }
-                if (t.sha1() != null && !t.sha1().equalsIgnoreCase(HexFormat.of().formatHex(md.digest()))) {
+                if (t.sha1() != null && !t.sha1().equalsIgnoreCase(Hashing.hex(md))) {
                     throw new IOException("Hash non valido per " + t.url());
                 }
                 Files.move(part, t.dest(), StandardCopyOption.REPLACE_EXISTING);
                 return;
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrotto", e);
+                throw interrupted(e);
             } catch (IOException e) {
                 last = e;
                 Files.deleteIfExists(part);
@@ -191,19 +199,10 @@ public final class Downloader {
         try {
             return f.get();
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw interrupted(e);
         } catch (Exception e) {
             Throwable c = e.getCause() != null ? e.getCause() : e;
             throw c instanceof IOException io ? io : new IOException(c.getMessage(), c);
-        }
-    }
-
-    private static MessageDigest sha1Digest() {
-        try {
-            return MessageDigest.getInstance("SHA-1");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
         }
     }
 
@@ -211,8 +210,7 @@ public final class Downloader {
         try {
             Thread.sleep(ms);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrotto", e);
+            throw interrupted(e);
         }
     }
 

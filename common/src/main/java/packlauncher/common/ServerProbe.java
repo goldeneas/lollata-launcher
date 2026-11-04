@@ -10,7 +10,6 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,8 +36,6 @@ import java.util.UUID;
  * (dalla 1.20.2 il server aspetta ancora il Login Acknowledged).
  */
 public final class ServerProbe {
-    public static final String PREMIUM = "premium";
-    public static final String OFFLINE = "offline";
     /** Nome usato nel Login Start (deve essere un nome valido: 3-16 caratteri). */
     public static final String PROBE_NAME = "LollataProbe";
 
@@ -49,7 +46,7 @@ public final class ServerProbe {
     public ServerProbe() { this(5000); }
 
     /**
-     * @param authMode {@link #PREMIUM}, {@link #OFFLINE} o null se non è stato possibile capirlo
+     * @param authMode {@link Minecraft#PREMIUM}, {@link Minecraft#OFFLINE} o null se non è stato possibile capirlo
      * @param detail   spiegazione leggibile (cosa ha risposto il server)
      * @param online   false se il server non risponde nemmeno allo status ping (spento o irraggiungibile)
      */
@@ -57,14 +54,8 @@ public final class ServerProbe {
 
     /** "host" o "host:porta" (porta 25565 di default). */
     public Result probe(String server) {
-        String host = server.trim();
-        int port = 25565;
-        int colon = host.lastIndexOf(':');
-        if (colon > 0 && host.indexOf(':') == colon) {
-            port = Integer.parseInt(host.substring(colon + 1));
-            host = host.substring(0, colon);
-        }
-        return probe(host, port);
+        Minecraft.Address a = Minecraft.parseAddress(server);
+        return probe(a.host(), a.port());
     }
 
     public Result probe(String host, int port) {
@@ -82,9 +73,8 @@ public final class ServerProbe {
         }
         if (protocol < 0) return new Result(null, "il server non ha indicato la versione del protocollo", protocol, version, true);
 
-        List<String> markers = new ArrayList<>();
-        markers.add(marker);
-        if (!marker.isEmpty()) markers.add("");
+        // Con il marker Forge prima; se la risposta non è chiara si riprova senza.
+        List<String> markers = marker.isEmpty() ? List.of("") : List.of(marker, "");
         String last = null;
         for (String m : markers) {
             try {
@@ -146,24 +136,24 @@ public final class ServerProbe {
             }
             ByteBuffer b = ByteBuffer.wrap(body);
             int id = readVarInt(b);
-            switch (id) {
-                case 0x01: return new Answer(PREMIUM, "il server chiede la cifratura (online-mode=true)");
-                case 0x02: return new Answer(OFFLINE, "login accettato senza autenticazione (online-mode=false)");
-                case 0x03: return new Answer(OFFLINE, "login accettato senza autenticazione (online-mode=false)");
-                case 0x04: return new Answer(OFFLINE, "il server ha proseguito il login senza autenticazione (online-mode=false)");
-                case 0x00: {
-                    String reason = readString(b);
-                    String low = reason.toLowerCase(Locale.ROOT);
-                    if (low.contains("whitelist") || low.contains("white-list") || low.contains("white_list")
-                            || low.contains("whitelisted") || low.contains("banned")) {
-                        return new Answer(OFFLINE, "il server ha controllato la whitelist senza autenticazione "
-                                + "(online-mode=false): " + reason);
-                    }
-                    return new Answer(null, "il server ha rifiutato il login di prova: " + reason);
-                }
-                default: return new Answer(null, "risposta al login inattesa (pacchetto " + id + ")");
-            }
+            return switch (id) {
+                case 0x01 -> new Answer(Minecraft.PREMIUM, "il server chiede la cifratura (online-mode=true)");
+                case 0x02, 0x03 -> new Answer(Minecraft.OFFLINE, "login accettato senza autenticazione (online-mode=false)");
+                case 0x04 -> new Answer(Minecraft.OFFLINE, "il server ha proseguito il login senza autenticazione (online-mode=false)");
+                case 0x00 -> disconnect(readString(b));
+                default -> new Answer(null, "risposta al login inattesa (pacchetto " + id + ")");
+            };
         }
+    }
+
+    /** Un Disconnect per whitelist/ban arriva solo dopo la fase di autenticazione: il server è offline. */
+    private static Answer disconnect(String reason) {
+        String low = reason.toLowerCase(Locale.ROOT);
+        if (low.contains("whitelist") || low.contains("white-list") || low.contains("white_list") || low.contains("banned")) {
+            return new Answer(Minecraft.OFFLINE, "il server ha controllato la whitelist senza autenticazione "
+                    + "(online-mode=false): " + reason);
+        }
+        return new Answer(null, "il server ha rifiutato il login di prova: " + reason);
     }
 
     private Socket connect(String host, int port) throws IOException {
@@ -191,7 +181,7 @@ public final class ServerProbe {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
         writeVarInt(b, 0x00);
         writeString(b, name);
-        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
+        UUID uuid = Minecraft.offlineUuid(name);
         if (protocol >= 764) {            // 1.20.2+: UUID obbligatorio
             writeUuid(b, uuid);
         } else if (protocol >= 761) {     // 1.19.3 - 1.20.1: UUID opzionale
@@ -229,22 +219,20 @@ public final class ServerProbe {
         b.write(v);
     }
 
-    static int readVarInt(InputStream in) throws IOException {
-        int value = 0;
-        for (int i = 0; i < 5; i++) {
-            int r = in.read();
-            if (r < 0) throw new EOFException();
-            value |= (r & 0x7F) << (7 * i);
-            if ((r & 0x80) == 0) return value;
-        }
-        throw new IOException("VarInt troppo lungo");
-    }
+    /** Un byte alla volta, -1 a fine dati. */
+    private interface ByteSource { int next() throws IOException; }
+
+    static int readVarInt(InputStream in) throws IOException { return readVarInt(in::read); }
 
     static int readVarInt(ByteBuffer b) throws IOException {
+        return readVarInt(() -> b.hasRemaining() ? b.get() & 0xFF : -1);
+    }
+
+    private static int readVarInt(ByteSource src) throws IOException {
         int value = 0;
         for (int i = 0; i < 5; i++) {
-            if (!b.hasRemaining()) throw new EOFException();
-            int r = b.get() & 0xFF;
+            int r = src.next();
+            if (r < 0) throw new EOFException();
             value |= (r & 0x7F) << (7 * i);
             if ((r & 0x80) == 0) return value;
         }

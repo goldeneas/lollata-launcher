@@ -17,13 +17,12 @@ import javax.swing.SwingUtilities;
 public final class Main {
     public static void main(String[] args) throws Exception {
         Config cfg = new Config();
-        boolean cli = List.of(args).contains("--cli") || GraphicsEnvironment.isHeadless();
-        if (!cli) {
+        List<String> flags = List.of(args);
+        if (!flags.contains("--cli") && !GraphicsEnvironment.isHeadless()) {
             SwingUtilities.invokeLater(() -> new LauncherUI(cfg).show());
             return;
         }
 
-        List<String> flags = List.of(args);
         AccountManager accounts = AccountManager.create(cfg);
         if (flags.contains("--logout")) {
             accounts.logout();
@@ -41,9 +40,8 @@ public final class Main {
         String packId = arg(args, "--pack", null);
         String packUrl = arg(args, "--pack-url", null);
         String mem = arg(args, "--memory", null);
-        boolean dryRun = List.of(args).contains("--dry-run");
 
-        Downloader dl = new Downloader(cfg.launcherName + "/1.0");
+        Downloader dl = new Downloader(cfg.userAgent());
         if (packUrl == null) {
             List<Pack.Entry> packs = Pack.loadIndex(dl, cfg.indexUrl);
             Pack.Entry e = packs.stream().filter(p -> packId == null || p.id().equals(packId)).findFirst()
@@ -55,13 +53,12 @@ public final class Main {
 
         Session session = premium ? accounts.premiumSession() : Session.offline(name);
         LaunchFlow.Prepared prep = LaunchFlow.prepare(cfg, dl, pack, session, memory, Progress.CONSOLE);
-        if (dryRun) {
+        if (flags.contains("--dry-run")) {
             System.out.println(String.join("\n", prep.command()));
             return;
         }
         Process p = GameLauncher.start(prep.command(), prep.instanceDir());
-        System.out.println("Gioco avviato (pid " + p.pid() + "), output in "
-                + prep.instanceDir().resolve(".packlauncher/game-output.log"));
+        System.out.println("Gioco avviato (pid " + p.pid() + "), output in " + prep.gameLog());
         System.exit(p.waitFor());
     }
 

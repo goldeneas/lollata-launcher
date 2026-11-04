@@ -48,6 +48,9 @@ public final class Config {
         }
     }
 
+    /** User-Agent per le richieste HTTP del launcher. */
+    public String userAgent() { return launcherName + "/1.0"; }
+
     public String get(String key, String def) { return user.getProperty(key, def); }
 
     public void set(String key, String value) { user.setProperty(key, value); }

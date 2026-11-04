@@ -1,5 +1,7 @@
 package packlauncher;
 
+import packlauncher.common.Minecraft;
+
 /**
  * Chi può entrare in quale server.
  * Un account premium entra ovunque; un nickname offline solo sui server con authMode "offline"
@@ -8,12 +10,8 @@ package packlauncher;
 public final class AccessPolicy {
     private AccessPolicy() {}
 
-    public static boolean requiresPremium(String authMode) {
-        return Pack.AUTH_PREMIUM.equals(authMode);
-    }
-
     public static boolean canJoin(String authMode, boolean premiumAccount) {
-        return premiumAccount || !requiresPremium(authMode);
+        return premiumAccount || !Minecraft.PREMIUM.equals(authMode);
     }
 
     /** null se l'accesso è consentito, altrimenti il messaggio da mostrare. */
