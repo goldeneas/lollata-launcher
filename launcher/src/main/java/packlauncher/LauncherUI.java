@@ -64,6 +64,7 @@ public final class LauncherUI {
     /** Al posto della tendina quando c'è un solo server. */
     private final JLabel packName = new JLabel(" ");
     private final JSpinner ramSpinner;
+    private final JButton uninstallButton = new JButton("Disinstalla modpack");
     private final JButton playButton = new JButton("Caricamento...");
     private final JProgressBar bar = new JProgressBar();
     private final JLabel status = new JLabel(" ");
@@ -127,6 +128,11 @@ public final class LauncherUI {
         feedback.add(progress, "progress");
         c.gridy = 5; c.insets = new Insets(4, 4, 4, 4);
         form.add(feedback, c);
+        c.gridy = 6;
+        form.add(uninstallButton, c);
+        uninstallButton.setEnabled(false);
+        uninstallButton.setToolTipText("Rimuovi i file locali del modpack selezionato per liberare spazio");
+        uninstallButton.addActionListener(e -> uninstall());
 
         playButton.setFont(playButton.getFont().deriveFont(Font.BOLD, 16f));
         playButton.setPreferredSize(new Dimension(200, 44));
@@ -228,6 +234,7 @@ public final class LauncherUI {
         Pack.Entry entry = packs.get(idx);
         if (currentPack != null && currentPack.id.equals(entry.id())) return;
         currentPack = null;
+        updateUninstall();
         serverOnline = true;
         playButton.setEnabled(false);
         showPackInfo(entry.name(), entry.summary(), entry.server());
@@ -311,8 +318,42 @@ public final class LauncherUI {
         });
     }
 
+    private void updateUninstall() {
+        Pack.Entry entry = selectedEntry();
+        uninstallButton.setEnabled(!busyNow && entry != null
+                && PackUninstaller.isInstalled(cfg.baseDir, entry.id()));
+    }
+
+    private void uninstall() {
+        Pack.Entry entry = selectedEntry();
+        if (busyNow || entry == null || !uninstallButton.isEnabled()) return;
+        Object[] options = {"Disinstalla", "Annulla"};
+        int answer = JOptionPane.showOptionDialog(frame,
+                "Disinstallare il modpack «" + entry.name() + "»?\n\n"
+                + "Verranno eliminati tutti i suoi file locali, inclusi mondi salvati,\n"
+                + "screenshot, mod aggiunte e impostazioni di gioco. L'operazione è definitiva.\n\n"
+                + "Gli altri modpack, i file condivisi e l'account resteranno disponibili.\n"
+                + "Potrai scaricare di nuovo il modpack premendo Gioca.",
+                "Disinstalla modpack", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE,
+                null, options, options[1]);
+        if (answer != 0) return;
+        setBusy(true);
+        status.setText("Disinstallazione del modpack...");
+        background(() -> {
+            PackUninstaller.uninstall(cfg.baseDir, entry.id());
+            SwingUtilities.invokeLater(() -> {
+                setBusy(false);
+                logArea.append("Modpack disinstallato: " + entry.name() + "\n");
+                JOptionPane.showMessageDialog(frame,
+                        "Modpack «" + entry.name() + "» disinstallato.\nLo spazio occupato dai suoi file locali è stato liberato.",
+                        "Disinstallazione completata", JOptionPane.INFORMATION_MESSAGE);
+            });
+        });
+    }
+
     private void setBusy(boolean busy) {
         busyNow = busy;
+        updateUninstall();
         playButton.setEnabled(!busy);
         nameField.setEnabled(!busy);
         accountBox.setEnabled(!busy);
@@ -404,6 +445,7 @@ public final class LauncherUI {
 
     /** Abilita "Gioca" solo se l'account scelto può entrare nel server selezionato. */
     private void updateAccess() {
+        updateUninstall();
         if (busyNow) return;
         boolean premium = premiumSelected();
         String authMode = currentAuthMode();

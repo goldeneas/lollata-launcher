@@ -246,6 +246,10 @@ se Microsoft revoca il token (es. password cambiata, 90 giorni senza usarlo).
 3. **Account**: "Non-premium" + nickname, oppure **Accedi con Microsoft** (una volta sola, poi resta salvato).
    Sui server premium serve l'account Microsoft. Nickname, RAM e account scelto vengono ricordati per ogni server.
 4. Premi **Gioca**.
+5. Per liberare spazio, seleziona il server e premi **Disinstalla modpack** (attivo solo se la sua istanza è presente).
+   Dopo la conferma vengono eliminati tutti i file dell’istanza, inclusi mondi, screenshot, mod personali
+   e impostazioni di gioco. Gli altri pack, librerie/asset/Java condivisi e account restano intatti.
+   Puoi reinstallarlo con **Gioca**; i file personali eliminati non vengono recuperati.
 
 Il primo avvio scarica circa 1–2 GB. I dati stanno in `%APPDATA%\.lollata-launcher\` (Windows) o `~/.lollata-launcher/` (Linux).
 In caso di crash il launcher propone di aprire il log
