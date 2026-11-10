@@ -270,6 +270,8 @@ rilevamento premium/offline contro un server Minecraft finto (online-mode, offli
 con marker FML, server spento, formato del Login Start per 1.12-1.21); login Microsoft contro servizi
 finti (device code con attesa e slow_down, catena Xbox/XSTS/Minecraft, refresh del token, token revocato,
 account senza Xbox o senza Minecraft); salvataggio dell'account e regole di accesso.
+Coprono anche la RAM digitata senza Invio o scelta con le frecce, la precedenza sul limite JVM
+del pack/profilo e l'ereditarietà dei parametri Quick Play di Minecraft 1.21.1 con NeoForge.
 
 ## Test eseguiti
 
@@ -300,6 +302,18 @@ Crea in `build/`:
 
 Il Java incluso (Temurin 21) serve ad aprire il launcher, e viene riusato per i modpack 1.20.5+.
 Per le versioni più vecchie il launcher scarica da solo Java 8 o 17.
+
+## RAM e ingresso automatico in ATM10A
+
+Il valore RAM della finestra viene acquisito anche se scritto a mano senza premere Invio.
+Il limite scelto prevale su eventuali `-Xmx` o `-XX:MaxHeapSize` del pack e del profilo.
+6 GB nella finestra corrispondono a `-Xmx6144M` nel comando del gioco.
+
+ATM10A include Memory Settings: nella versione NeoForge 1.21 il suo avviso RAM
+[interrompe la sequenza di avvio](https://github.com/someaddons/MemorySettings/blob/1.21neo/src/main/java/com/memorysettings/mixin/MinecraftMixin.java)
+che esegue anche Quick Play. Il pulsante «Procedi» chiude l'avviso senza riprendere quella sequenza.
+Correggere la RAM effettivamente allocata e riavviare il gioco elimina questo ostacolo;
+se resta al menu anche senza avvisi, verificare il log `.packlauncher/game-output.log` dell'istanza.
 
 ## Debug da terminale
 

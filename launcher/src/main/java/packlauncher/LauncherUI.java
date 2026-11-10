@@ -16,6 +16,7 @@ import java.awt.FlowLayout;
 import java.net.URI;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
+import java.text.ParseException;
 import java.util.List;
 
 import javax.swing.BorderFactory;
@@ -23,6 +24,7 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFrame;
+import javax.swing.JFormattedTextField;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -99,7 +101,7 @@ public final class LauncherUI {
         } catch (Exception ignored) {}
 
         int maxGb = Math.max(2, (int) (totalRamMb() / 1024) - 1);
-        ramSpinner = new JSpinner(new SpinnerNumberModel(Math.min(4, maxGb), 2, maxGb, 1));
+        ramSpinner = createRamSpinner(maxGb);
 
         JPanel form = new JPanel(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
@@ -273,7 +275,17 @@ public final class LauncherUI {
                     "Nickname non valido", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        int gb = (Integer) ramSpinner.getValue();
+        final int gb;
+        try {
+            gb = readMemoryGb(ramSpinner);
+        } catch (ParseException e) {
+            SpinnerNumberModel model = (SpinnerNumberModel) ramSpinner.getModel();
+            JOptionPane.showMessageDialog(frame,
+                    "Inserisci un numero intero di GB tra " + model.getMinimum() + " e " + model.getMaximum() + ".",
+                    "RAM non valida", JOptionPane.WARNING_MESSAGE);
+            ramSpinner.requestFocusInWindow();
+            return;
+        }
         cfg.set("pack", currentPack.id);
         if (!premium) cfg.setFor(currentPack.id, "name", name);
         cfg.setFor(currentPack.id, "account", premium ? Minecraft.PREMIUM : Minecraft.OFFLINE);
@@ -609,6 +621,20 @@ public final class LauncherUI {
         Thread t = new Thread(r, name);
         t.setDaemon(true);
         t.start();
+    }
+
+    static JSpinner createRamSpinner(int maxGb) {
+        JSpinner spinner = new JSpinner(new SpinnerNumberModel(Math.min(4, maxGb), 2, maxGb, 1));
+        // Mantiene anche il testo non valido quando si clicca Gioca, per poterlo segnalare.
+        ((JSpinner.DefaultEditor) spinner.getEditor()).getTextField()
+                .setFocusLostBehavior(JFormattedTextField.PERSIST);
+        return spinner;
+    }
+
+    static int readMemoryGb(JSpinner spinner) throws ParseException {
+        // Il testo digitato può non essere ancora stato trasferito nel modello dello spinner.
+        spinner.commitEdit();
+        return (Integer) spinner.getValue();
     }
 
     private static long totalRamMb() {

@@ -66,7 +66,6 @@ public final class GameLauncher {
 
         List<String> cmd = new ArrayList<>();
         cmd.add(javaExe);
-        cmd.add("-Xmx" + memoryMb + "M");
         cmd.addAll(pack.jvmArgs);
         if (p.jvmArgs.isEmpty()) {
             // versioni vecchie: nessun argomento JVM nel JSON
@@ -80,6 +79,9 @@ public final class GameLauncher {
         if (p.logging != null) {
             cmd.add(Json.str(p.logging, "argument").replace("${path}", inst.logConfig(p).toString()));
         }
+        // La RAM scelta dall'utente prevale su eventuali limiti del pack o del profilo.
+        cmd.removeIf(a -> a.startsWith("-Xmx") || a.startsWith("-XX:MaxHeapSize="));
+        cmd.add("-Xmx" + memoryMb + "M");
         cmd.add(p.mainClass);
         if (p.legacyGameArgs != null) {
             for (String a : p.legacyGameArgs.trim().split("\\s+")) cmd.add(subst(a, vars));
